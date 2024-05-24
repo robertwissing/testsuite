@@ -1,25 +1,34 @@
 #!/bin/bash
+
+
+#Directory for the ic generator and the setupfiles (you have to do make for icgenerator/mdl/mpi and make mpi for icgenerator/gasoline/
 current_dir=$(pwd -P)
 ICdir=$current_dir/icgenerator/gasoline/
 gasolineicgen=gasoline.gdicgen
 analysisdir=$current_dir/setupfiles/
 
+# Directory where the executable(gasoline/changa) is and the name of it:
+
 #dir=/mn/stornext/u3/robertwi/Projects/RECON/gasolinenew/
 #gasolinerun=gasoline.mhd
-
 dir=$current_dir/../../
 gasolinerun=ChaNGa.smp
 
+#If running serial/mpi or with charmrun
 mpirun="$dir/charmrun.smp +p 63"
 #mpirun=""
 #mpirun="mpirun "
 
+#An extra word added at the end of the simulation output files and directory
 EXTRANAME="CHANGA"
 
-ICCONFIG="-ICR0 1.0 -n 4800 -oi 100 -ICRLOOP0 0.5 -ICrhopow 1.0 -ICR0Rate 1.5"
+#Specific config for glass generation. Can leave be, should work for all, but if sharper density is needed increase ICrhopow (though at the cost of higher zero order errors usually), ICR0 determines how much of the periodic box particles should move on average in beginning, can be set to 1, ensures that whatever IC you give it, it will go towards the target density (and remove long-range biases). Initially density gradients are bad and it can be hard for the partilces to correctly fit the large-scale density structure in one go, as such we quickly decay the speed and then increase it to some factor of the initial ICR0 this is eveventually reduced as we get closer to the target density. ICR0rate is how fast the global speed should decay. and -n 4800 is just a maximum relaxation number it usually relaxes within 200-1000 steps(depending on the other parameters and IC). and oi is output incase you want to see what is going on during relaxation.
+ICCONFIG="-ICR0 1.0 -n 4800 -oi 4800 -ICRLOOP0 0.5 -ICrhopow 2.0 -ICR0Rate 1.5"
 
+#Extra condition during runtime
 #EXTRACONDALL="-SpinEta 0.0  "
 EXTRACONDALL=""
+
 
 usage() {
     echo "Usage: $0 [-i] [-a value1] ... [-h value8] <nameofsimulation> <Nsmooth> <Nres> <0: lattice | 1: rand | 2: glass>"
@@ -36,6 +45,7 @@ usage() {
     echo "                     0: lattice"
     echo "                     1: random"
     echo "                     2: glass"
+    echo "If glass data file exist for a specific Nsmooth it will skipp the glass generation and run the simulation. If you choose an nSmooth that does not have a glass datafile it will do the whole glass generation again."
     echo ""
     echo "List of available simulations:"
     echo "  accdisk            Accretion disk simulation."
@@ -401,6 +411,7 @@ if [ "$#" -lt 4 ]; then
     exit 1
 fi
 echo $0 $1 $2 $3 $4 $5
+#Specifically for different SPH versions
 if [ "$4" -eq 1 ]; then
 is=isph
 fi
@@ -425,9 +436,9 @@ fi
 if [ "$4" -eq 8 ]; then
 is=corrdensentrop
 fi
-# Define the list of kern values
+
+# Specifically done for special version of gasoline, which allow for easy changing of kernel
 kern_list=("32D" "64D" "128D" "256D" "32DIS" "64DIS" "128DIS" "256DIS" "32" "64" "128" "256" "CM04" "WuC2" "BUH" "CM05" "C2" "C4" "C6" "C8" "WuC4")
-# Define corresponding alpha values for each kern
 alpha_values=(
     "-alp14 1.0"
     "-alp16 1.0"
@@ -451,13 +462,6 @@ alpha_values=(
     "-alp12 1.0"
     "-alp13 1.0"
 )
-
-# Check if the lengths of kern_list and alpha_values are equal
-if [ "${#kern_list[@]}" -ne "${#alpha_values[@]}" ]; then
-    echo "Number of elements in kern_list and alpha_values do not match."
-else
-    echo "Number of elements in kern_list and alpha_values match."
-fi
 
 if [[ -z $5 ]]; then
     kern=""
@@ -497,7 +501,6 @@ fi
 
 prefile="$testsim$2_${distri}${prefile_extra}"
 glassfile_prefix="$testsim$2_glassN$1KERN$kern${is}${glassfile_extra}"
-#ICfile="$testsim$2_glassN$1KERN$kern${is}${runname_extra}-I"
 ICfile="$simfilename"
 runname="$testsim$2_N$1${distri2}K$kern${is}${runname_extra}${EXTRANAME}"
 directory="initruns"
@@ -507,7 +510,7 @@ mkdir datafiles
 mkdir initruns
 
     # Check if the file already exists
-    if [ -f "datafiles/$prefile.00000" ]; then
+    if [ -f "datafiles/$prefile.00000" -o -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
         echo "File $prefile.00000 already exists. Skipping creation."
     else
     # File doesn't exist, create it
@@ -524,7 +527,7 @@ mkdir initruns
 
 ##Glass relaxation    
     if [ "$3" -ne 0 ] && [ "$3" -ne 1 ]; then
-    if [ -f "${glassfile}_IC" ]; then
+    if [ -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
         echo "File ${glassfile}_IC already exists. Skipping creatin.."
     else
 	relaxglass=(mpirun -np $(($(nproc) / 2)) ${ICdir}/${gasolineicgen}$is -o $glassfile -I datafiles/$prefile.00000 -s $1 $alpha $ICCONFIG datafiles/$prefile.param)
