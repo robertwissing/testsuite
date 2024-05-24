@@ -1,0 +1,3 @@
+[submodule "icgenerator/mdl"]
+	path = icgenerator/mdl
+	url = https://github.com/N-BodyShop/mdl.git
