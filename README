@@ -16,7 +16,7 @@ Options:
 
 Arguments:
   nameofsimulation   Name of the simulation to be run (e.g., shocktube).
-  Nsmooth            Smoothing length for the simulation.
+  Nsmooth            Number of neigbours within smoothing kernel
   Nres               Resolution for the simulation.
   0 | 1 | 2          Initial conditions type:
                      0: lattice
