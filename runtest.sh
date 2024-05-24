@@ -35,7 +35,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  -a, -b, -c, ...    These options depend on the simulation. To see the specific options, enter the nameofsimulation without arguments."
-    echo "  -i                 Include additional information or options specific to the simulation."
+    echo "  -i                 Interactive."
     echo ""
     echo "Arguments:"
     echo "  nameofsimulation   Name of the simulation to be run (e.g., shocktube)."

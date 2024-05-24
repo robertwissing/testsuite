@@ -1,0 +1,30 @@
+A large testsuite of different simulations. Can generate both closed-packed lattice, poisson distributed or glass generated ICs. The glass generation occurs through an IC-generator that can produce glass for a wide-range of density profiles.
+
+Usage: ./runtest.sh [-i] [-a value1] ... [-h value8] <nameofsimulation> <Nsmooth> <Nres> <0: lattice | 1: rand | 2: glass>
+
+Options:
+  -a, -b, -c, ...    These options depend on the simulation. To see the specific options, enter the nameofsimulation without arguments.
+  -i                 Interactive.
+
+Arguments:
+  nameofsimulation   Name of the simulation to be run (e.g., shocktube).
+  Nsmooth            Smoothing length for the simulation.
+  Nres               Resolution for the simulation.
+  0 | 1 | 2          Initial conditions type:
+                     0: lattice
+                     1: random
+                     2: glass
+If glass data file exist for a specific Nsmooth it will skipp the glass generation and run the simulation. If you choose an nSmooth that does not have a glass datafile it will do the whole glass generation again.
+
+List of available simulations:
+  accdisk            Accretion disk simulation.
+  alfven             Alfvén wave simulation.
+  gresho             Gresho vortex simulation.
+  mhdcollapse        MHD collapse simulation.
+  kh                 Kelvin-Helmholtz instability simulation.
+  orzag              Orszag-Tang vortex simulation.
+  mhdrotor           MHD rotor simulation.
+  mhdloop            MHD loop advection simulation.
+  shocktube          Different kinds of shock tubes.
+                     (Enter 'shocktube' without arguments for more details on available options)
+  sedov              Sedov-Taylor blast wave simulation.
