@@ -1,5 +1,13 @@
 A large testsuite of different simulations. Can generate both closed-packed lattice, poisson distributed or glass generated ICs. The glass generation occurs through an IC-generator that can produce glass for a wide-range of density profiles.
 
+Before starting, you potentially need to change dir,gasolinerun,mpirun variables in runtest.sh to point towards your specific gasoline/changa build and if you are running serial mpi etc. :
+default is:
+dir=$current_dir/../../
+gasolinerun=ChaNGa.smp
+mpirun="$dir/charmrun.smp +p 63"
+
+If you wanna use the glass relaxation (hacked version of gasoline) you need to go into icgenerator/mdl/mpi and make and icgenerator/gasoline/ and make mpi (for default)
+
 Usage: ./runtest.sh [-i] [-a value1] ... [-h value8] <nameofsimulation> <Nsmooth> <Nres> <0: lattice | 1: rand | 2: glass>
 
 Options:
