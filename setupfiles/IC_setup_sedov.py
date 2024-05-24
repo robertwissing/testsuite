@@ -1,4 +1,3 @@
-## Setup for ORZAG-TANG
 import numpy as np
 import IC_distribute as distribute
 import IC_fixdens as fixdens
@@ -58,13 +57,18 @@ class setup_sedov(object):
     
     def __init__(self):
         pass
+
+
+    #Select 0 we define and inner and outer pressure and an inner radius of blast. And corresponding inner plasmabeta for mhd.
+    #Select 1 and 2 we choose an blast energy and give it to a few particles in centre.
+    #In select 1 we have different magnetic strength in the blast and outside blast(need divergence cleaning) and select 2 we have a uniform field.
     def create(self,nx,distri=0,vm=0,entry='glassreadyfile',select=1,betain=0,ublast=10.0,Rin=0.125,Pin=100,Pout=1):
         
          gam1=self.gamma-1
          self.rhozero=1.0
          #--setup parameters
-         if select==1:
-             print("You picked select 1")
+         if select==1 or select==2:
+             print("You picked select 1 or 2")
              Bin=Bout=0.0
          else:
              print("You picked select 0")
@@ -102,7 +106,7 @@ class setup_sedov(object):
          print('npart = ',self.npart,' particle mass = ',self.mass[1])
          self.h=smth.getsmooth(self,64)
 
-         if select == 1:
+         if select == 1 or select == 2:
              ublast=ublast/self.mass[0]
              Rin=np.mean(self.h)
          print('Rin',Rin)
@@ -119,7 +123,7 @@ class setup_sedov(object):
                  n=n+1
              else:
                  n2=n2+1
-         if select == 1:
+         if select == 1 or select == 2:
              Uin=ublast/n
              Uout=2*10**-5/n2
              Pin=Uin*(gam1*self.rhozero)
@@ -127,12 +131,14 @@ class setup_sedov(object):
              if betain==0:
                  Bzero=0.0
              else:
-                 Emagin=Uin/betain
-                 Emagout=Uout/betain
-                 Bin=np.sqrt(2*Emagin*self.rhozero)
-                 Bout=np.sqrt(2*Emagout*self.rhozero)
-                 #Bin=np.sqrt(2*Pin/(betain))
-                 #Bout=np.sqrt(2*Pout/(betain*0.01))
+                 if select == 1:
+                     Emagin=Uin/betain
+                     Emagout=Uout/betain
+                     Bin=np.sqrt(2*Emagin*self.rhozero)
+                     Bout=np.sqrt(2*Emagout*self.rhozero)
+                 else:
+                     Bin=np.sqrt(2*Pin/(betain))
+                     Bout=np.sqrt(2*Pin/(betain))
 
          print("Bin",Bin,"Bout",Bout);
             

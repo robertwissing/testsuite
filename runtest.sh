@@ -343,7 +343,10 @@ setup_sedov() {
     bvisc=${args[7]:-2.0}
     # Set default values if not specified
     echo "Using settings for Sedov blast wave + mhd:"
-    echo "Using ublast and setting to few particles(=1) or using defined inner pressure and radius(=0) -a : $select"
+    echo "    # For -a Select 0 we define and inner and outer pressure and an inner radius of blast. And corresponding inner plasmabeta for mhd.
+    #Select 1 and 2 we choose an blast energy and give it to a few particles in centre.
+    #In select 1 we have different magnetic strength in the blast and outside blast(need divergence cleaning) and select 2 we have a uniform field."
+    echo "Using ublast and setting to few particles(=1,2) or using defined inner pressure and radius(=0) -a : $select"
     echo "Plasma beta of initial blast region -b : $betain"
     echo "Energy of blast(select=1) -c : $ublast"
     echo "Radius of inner blast(select=0) -d : $Rin"
