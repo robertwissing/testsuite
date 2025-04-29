@@ -650,19 +650,37 @@
   adk = (3.3158322817560615/8./M_1_PI/4.)*((-6.94709887927258*2+au*(0.6116847826437315*3+au*(40.605173332308*4+au*(-109.39383705074306*5+au*(199.68569324945807*6+au*(-269.18551329586074*7+au*(230.97653909776236*8+au*(-108.50616849023058*9+21.153527253935298*10*au))))))))); \
   }                                                           \
   }
+
 /* Optimized kernel for N256G fit to 8 poly */
 #define KERNEL25X(ak,ar2)  {                                               \
-  if (ar2 <= 0) ak = (3.317969661358544/8./M_1_PI)*smf->Wzero21; /* Dehnen & Aly 2012 correction */ \
+  if (ar2 <= 0) ak = (3.333519158099654/8./M_1_PI)*smf->Wzero21; /* Dehnen & Aly 2012 correction */ \
   else {                                                          \
   double au = sqrt(ar2*0.25);                                 \
-  ak = (3.317969661358544/8./M_1_PI)*(1+au*(au*(-7.286240304649148+au*(5.818434743290395+au*(7.261024068735384+au*(6.504045269431593+au*(-40.310178334474344+au*(35.64179808739792+au*(-2.192539059615132+au*(-9.825094330475823+3.3887498603591095*au)))))))))); \
+  ak = (3.333519158099654/8./M_1_PI)*(1+au*(au*(-8.797329309892078+au*(22.779862958350954+au*(-77.56810139776094+au*(250.38439727825482+au*(-477.4506604635459+au*(533.1786458985575+au*(-352.2063281789063+au*(129.0855762822985-20.406063067356456*au)))))))))); \
   }                                                           \
   }
 #define DKERNEL25X(adk,ar2) {                                  \
   if (ar2 <= 0) adk = 0.0; /* Dehnen & Aly 2012 correction */ \
   else {                                                      \
   double au = sqrt(ar2*0.25);                     \
-  adk = (3.317969661358544/8./M_1_PI/4.)*((-7.286240304649148*2+au*(5.818434743290395*3+au*(7.261024068735384*4+au*(6.504045269431593*5+au*(-40.310178334474344*6+au*(35.64179808739792*7+au*(-2.192539059615132*8+au*(-9.825094330475823*9+3.3887498603591095*10*au))))))))); \
+  adk = (3.333519158099654/8./M_1_PI/4.)*((-8.797329309892078*2+au*(22.779862958350954*3+au*(-77.56810139776094*4+au*(250.38439727825482*5+au*(-477.4506604635459*6+au*(533.1786458985575*7+au*(-352.2063281789063*8+au*(129.0855762822985*9-20.406063067356456*10*au))))))))); \
+  }                                                           \
+  }
+
+/* Optimized kernel for N256G fit to 8 poly */
+#define KERNEL26X(ak,ar2)  {                                               \
+  if (ar2 <= 0) ak = (3.834840040356353/8./M_1_PI)*smf->Wzero21; /* Dehnen & Aly 2012 correction */ \
+  else {                                                          \
+  double au = sqrt(ar2*0.25);                                 \
+  ak = (3.834840040356353/8./M_1_PI)*(1+au*(au*(-14.042491901115246+au*(61.288853986788745+au*(-216.23736210047073+au*(563.7927037629424+au*(-946.5609199149101+au*(994.6633006621495+au*(-637.8671491106553+au*(229.76668698402645-35.80362236875422*au)))))))))); \
+  }                                                           \
+  }
+#define DKERNEL26X(adk,ar2) {                                  \
+  if (ar2 <= 0) adk = 0.0; /* Dehnen & Aly 2012 correction */ \
+  else {                                                      \
+  double au = sqrt(ar2*0.25);                     \
+  adk = (3.834840040356353/8./M_1_PI/4.)*((-14.042491901115246*2+au*(61.288853986788745*3+au*(-216.23736210047073*4+au*(563.7927037629424*5+au*(-946.5609199149101*6+au*\
+(994.6633006621495*7+au*(-637.8671491106553*8+au*(229.76668698402645*9-35.80362236875422*10*au))))))))); \
   }                                                           \
   }
 
@@ -5263,13 +5281,14 @@ double drs15,drs16,drs17,drs18,drs19,drs20,drs21,drs22;
     double ab;
     rs *= fNorm;
     drs *= fNorm1;
-    ab = 0.0;
 
         //rq = 1.0*rs*q->fMass/(pow(p->fDensity,ab)*pow(q->fDensity,1.0-ab));
     //rp = 1.0*rs*p->fMass/(pow(p->fDensity,1.0-ab)*pow(q->fDensity,ab));
     //one could also calculate p->Q4 before and use it here.
     //rq = -1.0*drs*q->fMass/(pow(p->fDensity,ab)*pow(q->fDensity,1.0-ab))*nnList[i].fDist2/3.0;
     //rp = -1.0*drs*p->fMass/(pow(p->fDensity,1.0-ab)*pow(q->fDensity,ab))*nnList[i].fDist2/3.0
+    
+    ab=0.0;
     rq=p->fDensity*2.0;
     //rq=1.0;
       //rq = (q->fMass/q->fDensity*rs)*p->fDensity*2.0;
@@ -5417,11 +5436,13 @@ double drs15,drs16,drs17,drs18,drs19,drs20,drs21,drs22;
     drs *= fNorm1;
     //etafacp = (q->Eta_Factor != 0 ? 1.0/q->Eta_Factor : 1.0);
     //etafacq = (p->Eta_Factor != 0 ? 1.0/p->Eta_Factor : 1.0);
-    etafacp = p->Eta_Factor/q->Eta_Factor;
-    etafacq = q->Eta_Factor/p->Eta_Factor;
-    rq = rs*q->fMass*etafacp/p->fDensity;
-    rp = rs*p->fMass*etafacq/q->fDensity;
-
+    //etafacp = p->Eta_Factor/q->Eta_Factor;
+    //etafacq = q->Eta_Factor/p->Eta_Factor;
+    //rq = rs*q->fMass*etafacp/p->fDensity;
+    //rp = rs*p->fMass*etafacq/q->fDensity;
+    double facQ = 0.2;
+    rq = pow(q->fDensity/p->fDensity,facQ)*q->fMass/q->fDensity*rs;
+    rp = pow(p->fDensity/q->fDensity,facQ)*p->fMass/p->fDensity*rs;
 if (TYPEQueryACTIVE(p)) {
     p->fDensity_Corrector += rq;
   }
@@ -5776,7 +5797,7 @@ void ICGenerator(PARTICLE *p,int nSmooth,NN *nnList,SMF *smf)
 #ifdef ICGEN
   FLOAT ih2,ih,ph,r2,rs,drs,fDensity,fNorm,fNorm1,vFac,aFac,divvi,divvj,dxterm,dyterm,dzterm,nrs,pPeff,qPeff,pP,qP;
   FLOAT dx,dy,dz,rq,rp,igDensity2p,igDensity2q,ih2q,ihq,qh,rpartp,rpartq,rho0p,rho0q,igrho0p,igrho0q;
-  FLOAT dxtermq,dytermq,dztermq,divvcorrq,divvcorrp,ttres,Rinside,smhrat;
+  FLOAT dxtermq,dytermq,dztermq,divvcorrq,divvcorrp,ttres,ttresexp,poly1,ttresedge,zedge,rhoedge,rhoedgecentre,Rinside,smhrat;
   PARTICLE *q;
   int i;
   //  printf("\n iorder %d STARTING \n ",p->iOrder);
@@ -5834,37 +5855,45 @@ fNorm = 0.5*norm*ih2*ih;
   }
    if(smf->ICdensprofile >= 4){
      FLOAT zp = sqrt(p->r[2]*p->r[2]);
-     FLOAT Hdisk = smf->ICdensRsmooth*rpartp;
+     FLOAT epsilon = 0.0; 
+     FLOAT Hdisk = smf->ICdensRsmooth*(rpartp+epsilon);
      FLOAT qdisk = 0.5;
-     FLOAT sigmadisk= pow(rpartp,-qdisk);
-     //FLOAT mindens = 0.25*pow(smf->ICdensR,-qdisk);
+     FLOAT C1 = smf->ICdensinner/(smf->ICdensRsmooth*sqrt(2*M_PI));
+     FLOAT sigmadisk= C1 * pow(rpartp+epsilon,-qdisk-1.0); // Central density of the disk
      FLOAT mindens = smf->ICdensouter;
      FLOAT smooth = smf->ICdensRsmooth;
      smhrat = 1.0; //smoothing of unresolved density gradients, for example, if u want a 0.03 scaleheight disk and smoothing length is 1 it changes the scaleheight to be = smhrat*smoothing length
-     Rinside = 0.5;
+     Rinside = 0.0;
+     
+     FLOAT C2 = pow(smf->ICdensinner*smf->ICdensRsmooth*smf->ICdensRsmooth/(p->fMass*sqrt(2*M_PI)),1./3.);
+     ttres = C2*pow((rpartp+epsilon),(2.0-qdisk)/3.0);
+
+     ttresedge = C2*pow((smf->ICdensR),(2.0-qdisk)/3.0);
+     zedge = smf->ICdensRsmooth*C2*pow((smf->ICdensR),(5.0-qdisk)/3.0);
+     rhoedgecentre = C1 * pow(smf->ICdensR,-qdisk-1.0);
+     rhoedge = rhoedgecentre*exp(-ttresedge*ttresedge/2.0);
+     FLOAT hedge = 2.0*pow(p->fMass/rhoedgecentre,1./3.);
+     //mindens = 0.01*rhoedge;
+
+     ttresexp = exp(-ttres*ttres/2.0);
+     if(rhoedge < mindens) rhoedge=mindens;
+     poly1 = - ( (log(rhoedge) - log(sigmadisk*ttresexp)) / ( log(zedge) - log(ttres*Hdisk) ) );
+     //poly1 = - ( (log(mindens) - log(sigmadisk*ttresexp)) / ( log(9.0) - log(ttres*Hdisk) ) );
+     if(poly1 < 0.0) poly1=0.0;
+     
+     sigmadisk *= ( zp > ttres*Hdisk ? ttresexp*(pow(zp/(ttres*Hdisk),-poly1)) : exp(-zp*zp/(2*Hdisk*Hdisk)) );
+
      if(smf->ICdensprofile==5 || smf->ICdensprofile==7){
-       smooth = ( rpartp <= Rinside && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
-       sigmadisk*=1.0/(1.0+exp(-(rpartp-Rinside)/smooth));
+       //smooth = ( rpartp <= Rinside && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
+       //sigmadisk*=1.0/(1.0+exp(-(rpartp-Rinside)/smooth));
      }
      if(smf->ICdensprofile==6 || smf->ICdensprofile==7){
-       smooth = ( rpartp >= smf->ICdensR && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
-       sigmadisk*=1.0/(1.0+exp(-(smf->ICdensR-rpartp)/smooth));
-	  }
-     //resolved scaleheight, though leads to quite significant changing target density field, so probably bad idea here.
-     //smooth = ( ph*smhrat*2.0 > Hdisk ? ph*smhrat*2.0 : Hdisk );
-     smooth = Hdisk;
-     sigmadisk *= 1.0/(smooth*sqrt(2*M_PI));
-     //We dampen the density gradient in the accretion disk by changing it to a pow(-2) after 3 scale heights(representing a density difference of around 100 from centre)
-     //There is probably a better way to do this... Tried to smooth similar to inner and outer disk but under estimates inner region by quite a lot in that case. 
-     //sigmadisk *= 0.5*pow(10,-8)*exp(-zp*zp/(2*smooth*smooth));
-     // Somehow ttres should depend on resolution though.... maybe needs to be an adjustable parameter
-     //Though at ttres = 3.0 the integral_-3^3 rho dz = 0.9973, for ttres=4 0.999937, ttres=2 0.9545
-     //ttres = 2.0 full integral with pow 2 decay 1.17046, pow 4 decay 1.02649 
-     //ttres = 3.0 full integral with pow 2 decay 1.02389, pow 4 decay 1.00616
-     //ttres = 4.0 full integral with pow 2 decay 1.00101, pow 4 decay 1.00029
-     //ttres = 3.0 and pow 3 full integral 1.0106, seems enough
-     ttres = 3.0;
-     sigmadisk *= 0.75*pow(10,-8)*( zp > ttres*Hdisk ? exp(-ttres*ttres/2.0)*(pow(zp/(ttres*Hdisk),-3.0)) : exp(-zp*zp/(2*Hdisk*Hdisk)) );
+       //smooth = ( rpartp >= smf->ICdensR && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
+       sigmadisk*=1.0/(1.0+exp(-(smf->ICdensR-rpartp)/hedge));
+          }
+
+
+
 
      if (isnan(sigmadisk)) {
     printf("SIGMADISK IS NAN\n");
@@ -5884,8 +5913,11 @@ if (p->iOrder==0){printf(" cs %f P %f nsmooth %d ph %f u %f upred %f dens %f rho
    
  // The power here determines the balance between getting the right density and the zero order errors (higher power weights density higher than getting a glassy/order distribution).
  // For stiff EOS a higher power is useful to fit the density more closely.
- p->fSoft = pow(p->fMass/rho0p,1./3.);
- p->fSoft0 = pow(p->fMass/rho0p,1./3.);
+ #ifdef DRHODTIC
+ p->fDensity=rho0p;
+ #endif
+ //p->fSoft = pow(p->fMass/rho0p,1./3.);
+ //p->fSoft0 = pow(p->fMass/rho0p,1./3.);
  //double alprho = max(2.0,1.0/(0.144*abs(log(p->fDensity/rho0p))+0.1));
  double alprho = smf->ICrhopow;
  
@@ -6041,27 +6073,45 @@ double drs15,drs16,drs17,drs18,drs19,drs20,drs21,drs22;
     }
    if(smf->ICdensprofile >= 4){
      FLOAT zq = sqrt(q->r[2]*q->r[2]);
-     FLOAT Hdisk = smf->ICdensRsmooth*rpartq;
+     FLOAT epsilon = 0.0;
+     FLOAT Hdisk = smf->ICdensRsmooth*(rpartq+epsilon);
      FLOAT qdisk = 0.5;
-     FLOAT sigmadisk= pow(rpartq,-qdisk);
+     FLOAT C1 = smf->ICdensinner/(smf->ICdensRsmooth*sqrt(2*M_PI));
+     FLOAT sigmadisk= C1 * pow(rpartq+epsilon,-qdisk-1.0); // Central density of the disk
      //FLOAT mindens = 0.25*pow(smf->ICdensR,-qdisk);
      FLOAT mindens = smf->ICdensouter;
      FLOAT smooth = smf->ICdensRsmooth;
+     Rinside = 0.0;
+
+     FLOAT C2 = pow(smf->ICdensinner*smf->ICdensRsmooth*smf->ICdensRsmooth/(q->fMass*sqrt(2*M_PI)),1./3.);
+     ttres = C2*pow((rpartq+epsilon),(2.0-qdisk)/3.0);
+
+     ttresedge = C2*pow((smf->ICdensR),(2.0-qdisk)/3.0);
+     zedge = smf->ICdensRsmooth*C2*pow((smf->ICdensR),(5.0-qdisk)/3.0);
+     rhoedgecentre = C1 * pow(smf->ICdensR,-qdisk-1.0);
+     rhoedge = rhoedgecentre*exp(-ttresedge*ttresedge/2.0);
+     FLOAT hedge = 2.0*pow(q->fMass/rhoedgecentre,1./3.);
+     //mindens = 0.01*rhoedge;
+
+     ttresexp = exp(-ttres*ttres/2.0);
+     if(rhoedge < mindens) rhoedge=mindens;
+     poly1 = - ( (log(rhoedge) - log(sigmadisk*ttresexp)) / ( log(zedge) - log(ttres*Hdisk) ) );
+     //poly1 = - ( (log(mindens) - log(sigmadisk*ttresexp)) / ( log(9.0) - log(ttres*Hdisk) ) );
+     if(poly1 < 0.0) poly1=0.0;
+
+     sigmadisk *= ( zq > ttres*Hdisk ? ttresexp*(pow(zq/(ttres*Hdisk),-(poly1))) : exp(-zq*zq/(2*Hdisk*Hdisk)) );
+     //sigmadisk *= ( zq > ttres*Hdisk ? exp(-ttres*ttres/2.0) : exp(-zq*zq/(2*Hdisk*Hdisk)) );
+
      if(smf->ICdensprofile==5 || smf->ICdensprofile==7){
-       smooth = ( rpartq <= Rinside && qh*smhrat > smf->ICdensRsmooth ? qh*smhrat : smf->ICdensRsmooth );
-       sigmadisk*=1.0/(1.0+exp(-(rpartq-Rinside)/smooth));
+       //smooth = ( rpartq <= Rinside && qh*smhrat > smf->ICdensRsmooth ? qh*smhrat : smf->ICdensRsmooth );
+       //sigmadisk*=1.0/(1.0+exp(-(rpartq-Rinside)/smooth));
      }
      if(smf->ICdensprofile==6 || smf->ICdensprofile==7){
-       smooth = ( rpartq >= smf->ICdensR && qh*smhrat > smf->ICdensRsmooth ? qh*smhrat : smf->ICdensRsmooth );
-       sigmadisk*=1.0/(1.0+exp(-(smf->ICdensR-rpartq)/smooth));
+       //smooth = ( rpartq >= smf->ICdensR && qh*smhrat > smf->ICdensRsmooth ? qh*smhrat : smf->ICdensRsmooth );
+       sigmadisk*=1.0/(1.0+exp(-(smf->ICdensR-rpartq)/hedge));
           }
-     //resolved scaleheight
-     //smooth = ( qh*smhrat*2.0 > Hdisk ? qh*smhrat*2.0 : Hdisk );
-     smooth = Hdisk;
-     sigmadisk *= 1.0/(smooth*sqrt(2*M_PI));
-     //sigmadisk *= 0.5*pow(10,-8)*exp(-zq*zq/(2*smooth*smooth));
-     sigmadisk *= 0.75*pow(10,-8)*( zq > ttres*Hdisk ? exp(-ttres*ttres/2.0)*(pow(zq/(ttres*Hdisk),-3.0)) : exp(-zq*zq/(2*Hdisk*Hdisk)) );
-     
+ 
+ 
      if (isnan(sigmadisk)) {
      printf("SIGMADISK IS NAN\n");
     sigmadisk = mindens;
@@ -6074,6 +6124,9 @@ double drs15,drs16,drs17,drs18,drs19,drs20,drs21,drs22;
 
 
    //alprho = max(2.0,1.0/(0.144*abs(log(q->fDensity/rho0q))+0.1));
+    #ifdef DRHODTIC
+   q->fDensity=rho0q;
+#endif
    qP = pow(q->fDensity/(rho0q),alprho);
    q->u=q->uPred=rho0q;
    pPeff=pP;
@@ -6367,8 +6420,10 @@ fDensity += rs*q->fMass;
 	if (qiActive & TYPE_ACTIVE) TYPESet(p,TYPE_NbrOfACTIVE);
 
     fDensity_old = p->fDensity;
+#ifndef DRHODTIC
     p->fDensity = fDensity*fNorm;
-
+#endif
+    
     divvnorm = (divvnorm != 0 ? 3/fabs(divvnorm) : 0); /* keep Norm positive consistent w/ std 1/rho norm */
     dvxdx = divvnorm*dvxdx1; dvydx = divvnorm*dvydx1; dvzdx = divvnorm*dvzdx1;
     dvxdy = divvnorm*dvxdy1; dvydy = divvnorm*dvydy1; dvzdy = divvnorm*dvzdy1;

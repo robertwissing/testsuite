@@ -607,7 +607,11 @@ if (msrLogInterval(msr)) {
 			**           3) we're at an output interval
 			*/
 			printf("divBerrAvg %g max %g ", divBerrAvg,divBerrMax);
-			if(divBerrMax < 2.0*1E-3)
+			FLOAT mylimit = 2.0*1E-3;
+#ifdef DRHODTIC
+			mylimit=2.0*1E-3;
+			  #endif
+			if(divBerrMax < mylimit)
 			  {
 			    iStop = 1;
 			    printf("/n Relaxation complete /n ");

@@ -397,6 +397,9 @@ void pkdReadTipsy(PKD pkd,char *pszFileName,int nStart,int nLocal,
         /* Place holders -- later fixed in pkdInitEnergy */
         CoolDefaultParticleData( &p->CoolParticle );
 #endif
+#ifdef CORRDENSPART
+	p->Q1corr = 1.0;
+#endif
         p->c = 0.0;
         p->fMetals = 0.0;
         p->fTimeForm = 1e37;
@@ -2011,9 +2014,9 @@ void pkdWriteTipsy(PKD pkd,char *pszFileName,int nStart,
     xdr_float(&xdrs,&fTmp);
     /* fTmp = sqrt(0.25*p->fBall2);  Write softening in tipsy outputs */
 #ifdef CHANGESOFT
-    fTmp = p->fSoft0;
+    fTmp = sqrt(0.25*p->fBall2);
 #else
-    fTmp = p->fSoft;
+    fTmp = sqrt(0.25*p->fBall2);
 #endif
 #ifdef DRHODT
     /* Horrible hack -- overwrite soft output */
@@ -4614,7 +4617,7 @@ pkdDrift(PKD pkd,double dDelta,FLOAT fCenter[3],int bPeriodic,int bInflowOutflow
                     bInBox = bInBox && (p->r[j] >= lfCenter[j]-0.5*pkd->fPeriod[j]);
                     bInBox = bInBox && (p->r[j] <  lfCenter[j]+0.5*pkd->fPeriod[j]);
 		    xii++;
-		        if (xii > 10) {
+		        if (xii > 1000) {
         // Print a message with the current value of xii
 			  //printf("Iteration count exceeded 10. Current count: %d, r %f perio %f center %f v %f \n", xii,p->r[j],pkd->fPeriod[j],lfCenter[j],p->v[j]);
     }
@@ -7236,18 +7239,20 @@ void pkdISPHInvertMatrix(PKD pkd)
   FLOAT Txx,Txy,Txz,Tyy,Tyz,Tzz;
   FLOAT Axx,Axy,Axz,Ayy,Ayz,Azz;
   double norm,inorm,cond;  
+  double ih2;
   for(i=0;i<pkdLocal(pkd);++i,++p) {
     if (pkdIsGas(pkd,p) && TYPEQueryACTIVE(p)) {
+      ih2=4.0/p->fBall2;
       Txx=p->Igrxx; Txy=p->Igrxy; Txz=p->Igrxz;
       Tyy=p->Igryy; Tyz=p->Igryz; Tzz=p->Igrzz;
       InvertSymMatrix3x3( Txx,Txy,Txz,Tyy,Tyz,Tzz, Axx,Axy,Axz,Ayy,Ayz,Azz );
       norm = FrobeniusNorm(Txx,Txy,Txz,Tyy,Tyz,Tzz);
       inorm = FrobeniusNorm(Axx,Axy,Axz,Ayy,Ayz,Azz);
       cond=norm * inorm;
-      if(cond > 1000.0){
-      	printf("\n Warning ill conditioned matrix!!!!!!!!!!!!!! %f \n    ",cond);
-	p->Igrxx=1.0; p->Igrxy=0.0; p->Igrxz=0.0;
-	p->Igryy=1.0; p->Igryz=0.0; p->Igrzz=1.0;
+      if(cond > 9.0){
+      	//printf("\n Warning ill conditioned matrix!!!!!!!!!!!!!! %f \n    ",cond);
+	p->Igrxx=ih2; p->Igrxy=0.0; p->Igrxz=0.0;
+	p->Igryy=ih2; p->Igryz=0.0; p->Igrzz=ih2;
       }else{
       p->Igrxx=Axx; p->Igrxy=Axy; p->Igrxz=Axz;
       p->Igryy=Ayy; p->Igryz=Ayz; p->Igrzz=Azz;}
@@ -7267,7 +7272,8 @@ void pkdUpdateDensity(PKD pkd)
     }
   for(i=0;i<pkdLocal(pkd);++i,++p) {
     if (pkdIsGas(pkd,p) && TYPEQueryACTIVE(p)) {
-        p->fDensity *= p->fDensity_Corrector;
+	 //  p->Q1corr *= p->fDensity_Corrector;
+    	    p->fDensity *= p->fDensity_Corrector;
     }
   }
 #endif

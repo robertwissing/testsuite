@@ -7630,17 +7630,24 @@ void msrGravity(MSR msr,double dStep,int bDoSun,
 
 
 		#ifdef ICGEN
-		double nfac=0.1*pow(1.0/msr->param.nSmooth,0.3333333); // 1/20 of average interparticle
+		double nfac=0.025*pow(1.0/msr->param.nSmooth,0.3333333); // 1/20 of average interparticle
 		printf("nfac %g,msr->param.dICR0 %g,msr->param.dICFmax %g ,msr->param.dICRLOOP0 %g",nfac,msr->param.dICR0,msr->param.dICFmax,msr->param.dICRLOOP0);
 		if(msr->param.dICRLOOP0 < 2.0*nfac){
 		  msr->param.dICFmax= -1.0;
 		}
 		if(msr->param.dICR0 < nfac && msr->param.dICFmax > 0.0)
 		  {
+		    #ifdef DRHODTIC
+                    if(msr->param.dICFmax >  *E0Avg){
+                      msr->param.dICR0 = msr->param.dICRLOOP0;
+                      msr->param.dICFmax=(*E0Avg);
+                    }
+		    #else
 		    if(msr->param.dICFmax >  *kinviscAvg){
 		      msr->param.dICR0 = msr->param.dICRLOOP0;
 		      msr->param.dICFmax=(*kinviscAvg);
 		    }
+		    #endif
 		    else if(msr->param.dICRLOOP0 < 2.0*nfac)
                       {
                         msr->param.dICR0 = 2.0*nfac;
@@ -7649,7 +7656,11 @@ void msrGravity(MSR msr,double dStep,int bDoSun,
 		    else{
 		      msr->param.dICRLOOP0=msr->param.dICRLOOP0/2.0;
 		      msr->param.dICR0 = msr->param.dICRLOOP0;
+		      #ifdef DRHODTIC
+		      msr->param.dICFmax=(*E0Avg);
+		      #else
                       msr->param.dICFmax=(*kinviscAvg);
+		      #endif
 		    }	      
 		  }
 		#endif
@@ -10629,7 +10640,7 @@ void msrICGetFmax(MSR msr,double *fmax)
   double fmaxinit = 0.0;
   double rate=1.0+0.8*msr->param.dICR0Rate;
   double rateup=1.0+0.16*msr->param.dICR0Rate;
-  if(msr->param.dICFmax < 0.0){
+  if(msr->param.dICFmax <= 0.0){
   	rate=1.0+0.1*msr->param.dICR0Rate;
         rateup=1.0+0.002*msr->param.dICR0Rate;
   }

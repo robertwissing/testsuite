@@ -315,6 +315,7 @@ FLOAT Veff;
     FLOAT fDivv_t;
     FLOAT fDivv_Corrector;
     FLOAT fDivv_Corrector2;
+    FLOAT Q1corr;
     FLOAT fDensity_Corrector;
     FLOAT Eta_Factor;
 #ifdef SINKING
