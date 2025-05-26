@@ -7,6 +7,8 @@ ICdir=$current_dir/icgenerator/gasoline/
 gasolineicgen=gasoline.gdicgen
 analysisdir=$current_dir/setupfiles/
 
+NOALP=1
+
 # Directory where the executable(gasoline/changa) is and the name of it:
 
 #dir=/mn/stornext/u3/robertwi/Projects/RECON/gasolinenew/
@@ -511,6 +513,11 @@ glassfile="${directory}/${glassfile_prefix}"
 
 mkdir datafiles
 mkdir initruns
+
+
+if [[ $NOALP == 1 ]]; then alpha=""; fi
+
+
 
     # Check if the file already exists
     if [ -f "datafiles/$prefile.00000" -o -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
