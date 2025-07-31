@@ -610,27 +610,32 @@ if (msrLogInterval(msr)) {
 			FLOAT mylimit = 2.0*1E-3;
 #ifdef DRHODTIC
 			mylimit=2.0*1E-3;
-			  #endif
+#endif
 			if(divBerrMax < mylimit)
 			  {
 			    iStop = 1;
-			    printf("/n Relaxation complete /n ");
-			    printf("Smoothing length step average/max (s*h) s = %g / %g /n", divBerrAvg, divBerrMax);
-			    printf("Force velocity = %g / %g /n", alphaAvg, alphaMax);
-			    printf("Density fitting = %g  /n", kinviscAvg);
-			    printf("Volume partitioning Q1 fit = %g / %g /n", Q1Avg, Q1Max);
-			    printf("Linear partitioning Q2 fit = %g / %g /n", Q2Avg, Q2Max);
-			    printf("Zeroth order error E0 fit = %g / %g /n", E0Avg, E0Max);
-                            printf("Linear order error E1_xx fit = %g / %g /n", Q4Avg, Q4Max);
-			    printf("Linear off term order error E1_xy fit = %g / %g /n", divBAvg, divBMax);
+			    printf("\n Relaxation complete \n ");
+			    printf("Smoothing length step average/max (s*h) s = %g / %g \n", divBerrAvg, divBerrMax);
+			    printf("Force velocity = %g / %g \n", alphaAvg, alphaMax);
+			    printf("Density fitting = %g  \n", kinviscAvg);
+			    printf("Volume partitioning Q1 fit = %g / %g \n", Q1Avg, Q1Max);
+			    printf("Linear partitioning Q2 fit = %g / %g \n", Q2Avg, Q2Max);
+			    printf("Zeroth order error E0 fit = %g / %g \n", E0Avg, E0Max);
+                            printf("Linear order error E1_xx fit = %g / %g \n", Q4Avg, Q4Max);
+			    printf("Linear off term order error E1_xy fit = %g / %g \n", divBAvg, divBMax);
 			  }
 #ifndef BENCHMARK
 			if (msr->param.iTreeZipStep && (iStep % msr->param.iTreeZipStep)==0) msrTreeZip(msr,iStep);
 
+
+
+
 			if ((bOutTime=msrOutTime(msr,dTime)) || iStep == msr->param.iStopStep || iStop ||
 			    (msrOutInterval(msr) > 0 && iStep%msrOutInterval(msr) == 0)  ||
 			    (msr->param.iOutMinorInterval && (iStep%msr->param.iOutMinorInterval == 0))) {
-			    int bDensitySmooth;
+int bDensitySmooth = 1;
+#ifdef TEST
+    				int bDensitySmooth;
 				if (msr->nGas && !msr->param.bKDK) {
 					msrActiveType(msr,TYPE_GAS,TYPE_ACTIVE|TYPE_TREEACTIVE|TYPE_SMOOTHACTIVE);
 					msrBuildTree(msr,1,-1.0,1);
@@ -653,6 +658,8 @@ if (msrLogInterval(msr)) {
 				    msrReorder(msr);
 				    msrMassCheck(msr,dMass,"After msrReorder in OutTime");
 				    }
+#endif
+				msrSelectOutputList(msr, &nOutputList, OutputList, iStep, bOutTime, &bDensitySmooth);
 				sprintf(achFile,msr->param.achDigitMask,msrOutName(msr),iStep);
                                 msrWriteOutputs(msr, achFile, OutputList, nOutputList, dTime);
 				msrFlushStarLog(msr);

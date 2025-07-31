@@ -908,7 +908,7 @@ void msrInitialize(MSR *pmsr,MDL mdl,int argc,char **argv)
 	prmAddParam(msr->prm,"nSmooth",1,&msr->param.nSmooth,sizeof(int),"s",
 				"<number of particles to smooth over> = 64");
 	msr->param.nSmoothMean = 200;
-	prmAddParam(msr->prm,"nSmoothMean",1,&msr->param.nSmoothMean,sizeof(int),"s",
+	prmAddParam(msr->prm,"nSmoothMean",1,&msr->param.nSmoothMean,sizeof(int),"smean",
 		    "<Mean number of particles to smooth over> = 200");
 	msr->param.bStandard = 0;
 	prmAddParam(msr->prm,"bStandard",0,&msr->param.bStandard,sizeof(int),"std",
@@ -1161,11 +1161,11 @@ void msrInitialize(MSR *pmsr,MDL mdl,int argc,char **argv)
         prmAddParam(msr->prm,"dICR0",2,&msr->param.dICR0,
                     sizeof(double),"ICR0",
                     "< IC Discplacement maximum> ");
-	msr->param.dICRLOOP0 = 0.25;
+	msr->param.dICRLOOP0 = 0.5;
         prmAddParam(msr->prm,"dICRLOOP0",2,&msr->param.dICRLOOP0,
                     sizeof(double),"ICRLOOP0",
                     "< IC Discplacement LOOP dist(for fast cleaning of large mode errors)> ");
-	msr->param.dICR0Rate = 1.0;
+	msr->param.dICR0Rate = 1.5;
         prmAddParam(msr->prm,"dICR0Rate",2,&msr->param.dICR0Rate,
                     sizeof(double),"ICR0Rate",
                     "< IC Discplacement maximum decay factor 1 default 0.5 half of that 2 double> ");
@@ -1173,7 +1173,7 @@ void msrInitialize(MSR *pmsr,MDL mdl,int argc,char **argv)
         prmAddParam(msr->prm,"dICQ1Avg",2,&msr->param.dICQ1Avg,
                     sizeof(double),"ICQ1Avg",
                     "< Used to compare new noise value with old noise value> ");
-	msr->param.dICrhopow = 1.0;
+	msr->param.dICrhopow = 2.0;
         prmAddParam(msr->prm,"dICrhopow",2,&msr->param.dICrhopow,
                     sizeof(double),"ICrhopow",
                     "< (rho_target/rho_current)^ICrhopow determines how important it is to minimize the density vs the SPH zero order errors -> 0 would mean it does not take into account density at all when relaxing > ");
@@ -3449,7 +3449,7 @@ void msrLogHeader(MSR msr,FILE *fp)
     LogParams(lgr, "SINKS","dJeansConstant: %g",msr->param.dJeansConstant);
     LogParams(lgr, "SINKS","dSinkFormDensity: %g",msr->param.dSinkFormDensity);
     LogParams(lgr, "SINKS","dSinkTimeEligible: %g",msr->param.dSinkTimeEligible);
-		#ifdef RHOITERATIVE
+		#if defined(RHOITERATIVE) || defined(CORRPARTITION)
     LogParams(lgr, "SPH","nSmoothMax: %d",msr->param.nSmooth);
     LogParams(lgr, "SPH","nSmoothMean: %d",msr->param.nSmoothMean);
 		#else
@@ -6393,6 +6393,7 @@ void msrSmoothFcnParam(MSR msr, double dTime, SMF *psmf)
     psmf->dESFEnergy = msr->param.dESFEnergy;
     psmf->dStarClusterRatio = msr->param.stfm->dStarClusterRatio;
 #endif /*STARFORM*/
+  psmf->ICrhopow = msr->param.dICrhopow;
 #ifdef COLLISIONS
     psmf->dCentMass = msr->param.dCentMass; /* for Hill sphere checks */
 #endif
@@ -6403,11 +6404,12 @@ void msrSmoothFcnParam(MSR msr, double dTime, SMF *psmf)
     psmf->dCentMass = 0.0; /* to disable Hill sphere checks */
 #endif
 #endif
-#ifdef RHOITERATIVE
+#if defined(RHOITERATIVE) || defined(CORRPARTITION)
     int nSmooth = msr->param.nSmoothMean;
-	psmf->nSmoothMean=msr->param.nSmoothMean;
+    psmf->nSmoothMean=msr->param.nSmoothMean;
 #else
 	int nSmooth = msr->param.nSmooth;
+	psmf->nSmoothMean=msr->param.nSmooth;
 #endif
 #ifdef MHD
 #ifdef MHDRESISTIVITY
@@ -6417,15 +6419,6 @@ void msrSmoothFcnParam(MSR msr, double dTime, SMF *psmf)
 psmf->psidecfac=msr->param.dMHDPsidecFac;
 psmf->fch=msr->param.dMHDCleanFac;
 #endif
-#endif
-#ifdef ICGEN
- psmf->ICrhopow = msr->param.dICrhopow;
- psmf->ICdensprofile = msr->param.dICdensprofile;
- psmf->ICdensdir = msr->param.dICdensdir;
- psmf->ICdensouter = msr->param.dICdensouter;
- psmf->ICdensinner = msr->param.dICdensinner;
- psmf->ICdensR = msr->param.dICdensR;
- psmf->ICdensRsmooth = msr->param.dICdensRsmooth;
 #endif
  psmf->alp = msr->param.dalp;
  psmf->alp2 = msr->param.dalp2;
@@ -7630,7 +7623,7 @@ void msrGravity(MSR msr,double dStep,int bDoSun,
 
 
 		#ifdef ICGEN
-		double nfac=0.025*pow(1.0/msr->param.nSmooth,0.3333333); // 1/20 of average interparticle
+		double nfac=0.025*pow(1.0/msr->param.nSmoothMean,0.3333333); // 1/20 of average interparticle
 		printf("nfac %g,msr->param.dICR0 %g,msr->param.dICFmax %g ,msr->param.dICRLOOP0 %g",nfac,msr->param.dICR0,msr->param.dICFmax,msr->param.dICRLOOP0);
 		if(msr->param.dICRLOOP0 < 2.0*nfac){
 		  msr->param.dICFmax= -1.0;
@@ -7893,6 +7886,9 @@ void msrDrift(MSR msr,double dTime,double dDelta)
 	}
 #endif
 
+#ifdef ICGEN
+msrUpdateDensity(msr);
+#endif
 #ifdef AGGS
 	msrAggsAdvanceClose(msr,dDelta);
 #endif
@@ -10693,14 +10689,11 @@ void msrInitSph(MSR msr,double dTime)
         msrActiveType(msr,TYPE_GAS,TYPE_ACTIVE|TYPE_TREEACTIVE|TYPE_SMOOTHACTIVE);
         msrBuildTree(msr,1,-1.0,1);
         printf("InitSph: Now doing Dendvdx\n");
+	//init density table
+	if (msr->param.dICdensprofile > 7){pstInitDensityTable(msr->pst, NULL, 0, NULL, NULL);}
+	msrUpdateDensity(msr);
         msrSmooth(msr,dTime,SMX_DENDVDX,1);
-
-		        #ifdef CORRDENSPART
-        		msrReSmooth(msr,dTime,SMX_PRECORRDENS,1);
-		        msrReSmooth(msr,dTime,SMX_CORRDENS,1);
-		        msrUpdateDensity(msr);
-		        #endif
-			#ifdef CORRENTROPYPART
+#ifdef CORRENTROPYPART
     printf("CORRENTROPY");
     msrReSmooth(msr,dTime,SMX_CORRENTROPY,1);
 #endif
@@ -10709,11 +10702,6 @@ void msrInitSph(MSR msr,double dTime)
 				msrISPHInvertMatrix(msr);
 				#endif
 	msrReSmooth(msr,dTime,SMX_DENDVDX,1); // needed for PdV corrector
-			    #ifdef CORRDENSPART
-	        	msrReSmooth(msr,dTime,SMX_PRECORRDENS,1);
-		        msrReSmooth(msr,dTime,SMX_CORRDENS,1);
-		        msrUpdateDensity(msr);
-		        #endif
 			#ifdef CORRENTROPYPART
     printf("CORRENTROPY");
     msrReSmooth(msr,dTime,SMX_CORRENTROPY,1);
@@ -11069,7 +11057,8 @@ void msrSph(MSR msr, double dTime, int iKickRung)
 	#ifdef TWOSMOOTH
         msrSmooth(msr,dTime,SMX_DENDVDX,1);
 	#else /* 3 SMOOTH */
-        msrSmooth(msr,dTime,SMX_MARKDENSITY,1);
+	 printf("three smooth: %d\n",msr->nSmoothActive );
+        msrReSmooth(msr,dTime,SMX_MARKDENSITY,1);
 	#endif
 #ifdef SURFACEAREA
         msrReSmooth(msr,dTime,SMX_SURFACENORMAL,1);
@@ -11128,13 +11117,6 @@ void msrSph(MSR msr, double dTime, int iKickRung)
 ** Calculate Pressure
 */
     int i;
-    for (i=0;i<1;i++) {
-#ifdef CORRDENSPART
-msrReSmooth(msr,dTime,SMX_PRECORRDENS,1);
-msrReSmooth(msr,dTime,SMX_CORRDENS,1);
-msrUpdateDensity(msr);
-#endif
-    }
     msrGetGasPressure(msr, dTime);
 #ifdef CORRENTROPYPART
     printf("CORRENTROPY");
@@ -11200,9 +11182,17 @@ msrBallMax(msr,iKickRung,1);
    pstISPHInvertMatrix(msr->pst,NULL,0,NULL,NULL);
  }
 
-  void msrUpdateDensity(MSR msr)
+void msrUpdateDensity(MSR msr)
  {
-   pstUpdateDensity(msr->pst,NULL,0,NULL,NULL);
+	struct inUpdateDensity in;
+	 in.g.ICnSmoothMean = msr->param.nSmoothMean;
+ 	 in.g.ICdensprofile = msr->param.dICdensprofile;
+ 	 in.g.ICdensdir = msr->param.dICdensdir;
+ 	 in.g.ICdensouter = msr->param.dICdensouter;
+ 	 in.g.ICdensinner = msr->param.dICdensinner;
+ 	 in.g.ICdensR = msr->param.dICdensR;
+ 	 in.g.ICdensRsmooth = msr->param.dICdensRsmooth;
+	 pstUpdateDensity(msr->pst,&in,sizeof(struct inUpdateDensity),NULL,NULL);
  }
 
 int msrDumpFrameInit(MSR msr, double dTime, double dStep, int bRestart) {

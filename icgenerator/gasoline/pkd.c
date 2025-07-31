@@ -397,9 +397,7 @@ void pkdReadTipsy(PKD pkd,char *pszFileName,int nStart,int nLocal,
         /* Place holders -- later fixed in pkdInitEnergy */
         CoolDefaultParticleData( &p->CoolParticle );
 #endif
-#ifdef CORRDENSPART
 	p->Q1corr = 1.0;
-#endif
         p->c = 0.0;
         p->fMetals = 0.0;
         p->fTimeForm = 1e37;
@@ -2040,15 +2038,7 @@ void pkdWriteTipsy(PKD pkd,char *pszFileName,int nStart,
         xdr_float(&xdrs,&fTmp);
         }
 #else
-    fTmp = p->fMetals;
-#ifdef DRHODT
-    /* Horrible hack -- overwrite metals output */
-#ifdef DRHODTDIVOUT
-    fTmp = p->fDivv_t;
-#else
-    fTmp = p->fDensity_t;
-#endif
-#endif
+    fTmp = p->Q1corr;
     xdr_float(&xdrs,&fTmp);
 #endif
 #else /* not gasoline */
@@ -2063,7 +2053,7 @@ void pkdWriteTipsy(PKD pkd,char *pszFileName,int nStart,
     fTmp = 0.0;
     xdr_float(&xdrs,&fTmp);
 #endif
-    fTmp = p->fPot;
+    fTmp = p->nSmoothCheck;
 #ifdef DRHODT
     /* Horrible hack -- overwrite pot output */
 #ifdef DRHODTDIVOUT
@@ -7249,7 +7239,7 @@ void pkdISPHInvertMatrix(PKD pkd)
       norm = FrobeniusNorm(Txx,Txy,Txz,Tyy,Tyz,Tzz);
       inorm = FrobeniusNorm(Axx,Axy,Axz,Ayy,Ayz,Azz);
       cond=norm * inorm;
-      if(cond > 9.0){
+      if(cond > 9.0 || cond <= 0.0){
       	//printf("\n Warning ill conditioned matrix!!!!!!!!!!!!!! %f \n    ",cond);
 	p->Igrxx=ih2; p->Igrxy=0.0; p->Igrxz=0.0;
 	p->Igryy=ih2; p->Igryz=0.0; p->Igrzz=ih2;
@@ -7261,22 +7251,254 @@ void pkdISPHInvertMatrix(PKD pkd)
 #endif
 }
 
-void pkdUpdateDensity(PKD pkd)
+
+void pkdDensityTableInit(PKD pkd)
 {
-#ifdef CORRDENSPART
+    int i;
+    /* Initialize struct to zero */
+    memset(&pkd->denTable, 0, sizeof(DensityTable));
+
+    /* Read density table from file */
+    FILE *fp = fopen("densitytable_xdr", "r");
+    if (!fp) {
+        fprintf(stderr, "Error opening density table: densitytable_xdr \n");
+        exit(1);
+    }
+
+    // Read header
+    if (fscanf(fp, "%d\n%d\n%f\n",
+               &pkd->denTable.dim,
+               &pkd->denTable.n,
+               &pkd->denTable.R) != 3) {
+        fprintf(stderr, "Invalid density table header\n");
+        exit(1);
+    }
+
+    XDR xdrs;
+    xdrstdio_create(&xdrs, fp, XDR_DECODE);
+
+    // Read grid axes
+    for (i = 0; i < pkd->denTable.dim; i++) {
+        u_int count = pkd->denTable.n;
+        pkd->denTable.axes[i] = malloc(pkd->denTable.n * sizeof(float));
+        if (!xdr_array(&xdrs, (char **)&pkd->denTable.axes[i], &count,
+                      pkd->denTable.n, sizeof(float), (xdrproc_t)xdr_float)) {
+            fprintf(stderr, "Error reading axis %d\n", i);
+            exit(1);
+        }
+    }
+
+    // Read densities
+    int total_points = 1;
+    for (i = 0; i < pkd->denTable.dim; i++) {
+        total_points *= pkd->denTable.n;
+    }
+
+    u_int dens_count = total_points;
+    pkd->denTable.densities = malloc(total_points * sizeof(float));
+    if (!xdr_array(&xdrs, (char **)&pkd->denTable.densities, &dens_count, total_points,
+                  sizeof(float), (xdrproc_t)xdr_float)) {
+        fprintf(stderr, "Error reading densities\n");
+        exit(1);
+    }
+
+    xdr_destroy(&xdrs);
+    fclose(fp);
+}
+
+void pkdDensityTableFree(DensityTable *table)
+{
+    int i;
+    if (table->dim > 0) {
+        for (i = 0; i < table->dim; i++) {
+            if (table->axes[i]) {
+                free(table->axes[i]);
+            }
+        }
+    }
+    if (table->densities) {
+        free(table->densities);
+        table->densities = NULL;
+    }
+
+    // Reset struct values
+    table->dim = 0;
+    table->n = 0;
+    table->R = 0.0;
+}
+
+double pkdGetDensityFromTable(DensityTable *table, float x, float y, float z) {
+    // Find grid indices
+    int indices[3] = {0};
+    float frac[3] = {0};
+    int d;
+    for (d = 0; d < table->dim; d++) {
+        float *axis = table->axes[d];
+        float pos = (d == 0) ? x : (d == 1) ? y : z;
+        
+        // Clamp to grid boundaries
+        if (pos < axis[0]) pos = axis[0];
+        if (pos > axis[table->n-1]) pos = axis[table->n-1];
+        
+        // Find index
+        float dr = (axis[table->n-1] - axis[0]) / (table->n - 1);
+        int idx = (int)((pos - axis[0]) / dr);
+        
+        if (idx < 0) idx = 0;
+        if (idx >= table->n-1) idx = table->n-2;
+        
+        indices[d] = idx;
+        frac[d] = (pos - axis[idx]) / dr;
+    }
+    
+    // Trilinear interpolation
+    float density = 0;
+    int total_points = table->n;
+    
+    switch (table->dim) {
+        case 1: {
+            int idx0 = indices[0];
+            density = table->densities[idx0] * (1 - frac[0]) + 
+                      table->densities[idx0+1] * frac[0];
+            break;
+        }
+        case 2: {
+            int idx0 = indices[0], idx1 = indices[1];
+            int base = idx0 * total_points + idx1;
+            
+            density = 
+                table->densities[base] * (1 - frac[0]) * (1 - frac[1]) +
+                table->densities[base + 1] * (1 - frac[0]) * frac[1] +
+                table->densities[base + total_points] * frac[0] * (1 - frac[1]) +
+                table->densities[base + total_points + 1] * frac[0] * frac[1];
+            break;
+        }
+        case 3: {
+            int idx0 = indices[0], idx1 = indices[1], idx2 = indices[2];
+            int base = (idx0 * total_points * total_points) + 
+                       (idx1 * total_points) + idx2;
+            int ystride = total_points;
+            int zstride = total_points * total_points;
+            
+            float c00 = table->densities[base] * (1 - frac[2]) + 
+                        table->densities[base + 1] * frac[2];
+            float c01 = table->densities[base + zstride] * (1 - frac[2]) + 
+                        table->densities[base + zstride + 1] * frac[2];
+            float c10 = table->densities[base + ystride] * (1 - frac[2]) + 
+                        table->densities[base + ystride + 1] * frac[2];
+            float c11 = table->densities[base + ystride + zstride] * (1 - frac[2]) + 
+                        table->densities[base + ystride + zstride + 1] * frac[2];
+            
+            float c0 = c00 * (1 - frac[1]) + c01 * frac[1];
+            float c1 = c10 * (1 - frac[1]) + c11 * frac[1];
+            
+            density = c0 * (1 - frac[0]) + c1 * frac[0];
+            break;
+        }
+    }
+    
+    return density;
+}
+
+void pkdUpdateDensity(PKD pkd,void *vin)
+{
   PARTICLE *p;
   int i;
   p = pkd->pStore;
-  if(p->iOrder==0){
-      printf("\n \n CORR %f \n \n ",p->fDensity_Corrector);
-    }
+  struct ICData *in = vin;
+  double rpartp,rho0p;
   for(i=0;i<pkdLocal(pkd);++i,++p) {
     if (pkdIsGas(pkd,p) && TYPEQueryACTIVE(p)) {
-	 //  p->Q1corr *= p->fDensity_Corrector;
-    	    p->fDensity *= p->fDensity_Corrector;
+
+  //smf->densprofile 1 const dens 2 discontinuity dens (set by smf->densdiff) smf->densR sets the range of the high density region, smoothed dens profile (smooth region set by densRsmooth) 4 accretiondisk 5 ...
+  //smf->densdir= 1 x, 2 y, 3 z, 4 r, 5 rcyl(x,y)
+  if(in->ICdensdir < 4){
+      rpartp = sqrt(p->r[in->ICdensdir-1]*p->r[in->ICdensdir-1]);
+    }
+    else if(in->ICdensdir==4){
+      rpartp = sqrt(p->r[0]*p->r[0]+p->r[1]*p->r[1]+p->r[2]*p->r[2]);
+    }
+    else if(in->ICdensdir==5){
+      rpartp = sqrt(p->r[0]*p->r[0]+p->r[1]*p->r[1]);
+    }
+    else if(in->ICdensdir>=6){
+      rpartp = p->r[in->ICdensdir-6];
+    }
+  
+  if(in->ICdensprofile==1){
+    rho0p=in->ICdensouter;
+    }
+  if(in->ICdensprofile==2){
+    if(rpartp > in->ICdensR){rho0p=in->ICdensouter;}
+    else{rho0p=in->ICdensinner;}
+    }
+  if(in->ICdensprofile==3){
+    if(in->ICdensdir > 3){
+      rho0p = in->ICdensouter+(in->ICdensinner-in->ICdensouter)*1.0/(1.0+exp(-(in->ICdensR-rpartp)/in->ICdensRsmooth));
+    }
+    else{
+      rho0p = in->ICdensouter+(in->ICdensinner-in->ICdensouter)*0.5*(tanh((p->r[in->ICdensdir-1]+in->ICdensR)/in->ICdensRsmooth)-tanh((p->r[in->ICdensdir-1]-in->ICdensR)/in->ICdensRsmooth));
     }
   }
-#endif
+   if(in->ICdensprofile >= 4){
+     FLOAT zp = sqrt(p->r[2]*p->r[2]);
+     FLOAT epsilon = 0.0; 
+     FLOAT Hdisk = in->ICdensRsmooth*(rpartp+epsilon);
+     FLOAT qdisk = 0.5;
+     FLOAT C1 = in->ICdensinner/(in->ICdensRsmooth*sqrt(2*M_PI));
+     FLOAT sigmadisk= C1 * pow(rpartp+epsilon,-qdisk-1.0); // Central density of the disk
+     FLOAT mindens = in->ICdensouter;
+     FLOAT smooth = in->ICdensRsmooth;
+     FLOAT smhrat = 1.0; //smoothing of unresolved density gradients, for example, if u want a 0.03 scaleheight disk and smoothing length is 1 it changes the scaleheight to be = smhrat*smoothing length
+     FLOAT Rinside = 0.0;
+     
+     FLOAT C2 = pow(in->ICdensinner*in->ICdensRsmooth*in->ICdensRsmooth/(p->fMass*sqrt(2*M_PI)),1./3.);
+     FLOAT ttres = C2*pow((rpartp+epsilon),(2.0-qdisk)/3.0);
+
+     FLOAT ttresedge = C2*pow((in->ICdensR),(2.0-qdisk)/3.0);
+     FLOAT zedge = in->ICdensRsmooth*C2*pow((in->ICdensR),(5.0-qdisk)/3.0);
+     FLOAT rhoedgecentre = C1 * pow(in->ICdensR,-qdisk-1.0);
+     FLOAT rhoedge = rhoedgecentre*exp(-ttresedge*ttresedge/2.0);
+     FLOAT hedge = 2.0*pow(p->fMass/rhoedgecentre,1./3.);
+     //mindens = 0.01*rhoedge;
+
+     FLOAT ttresexp = exp(-ttres*ttres/2.0);
+     if(rhoedge < mindens) rhoedge=mindens;
+     FLOAT poly1 = - ( (log(rhoedge) - log(sigmadisk*ttresexp)) / ( log(zedge) - log(ttres*Hdisk) ) );
+     //poly1 = - ( (log(mindens) - log(sigmadisk*ttresexp)) / ( log(9.0) - log(ttres*Hdisk) ) );
+     if(poly1 < 0.0) poly1=0.0;
+     
+     sigmadisk *= ( zp > ttres*Hdisk ? ttresexp*(pow(zp/(ttres*Hdisk),-poly1)) : exp(-zp*zp/(2*Hdisk*Hdisk)) );
+
+     if(in->ICdensprofile==5 || in->ICdensprofile==7){
+       //smooth = ( rpartp <= Rinside && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
+       //sigmadisk*=1.0/(1.0+exp(-(rpartp-Rinside)/smooth));
+     }
+     if(in->ICdensprofile==6 || in->ICdensprofile==7){
+       //smooth = ( rpartp >= smf->ICdensR && ph*smhrat > smf->ICdensRsmooth ? ph*smhrat : smf->ICdensRsmooth );
+       sigmadisk*=1.0/(1.0+exp(-(in->ICdensR-rpartp)/hedge));
+          }
+     if (isnan(sigmadisk)) {
+    printf("SIGMADISK IS NAN\n");
+    sigmadisk = mindens;
+} else if (sigmadisk <= mindens) {
+       //printf("SIGMADISK is below threshold\n");
+    sigmadisk = mindens;
+}
+     rho0p = sigmadisk; 
+   }
+
+if(in->ICdensprofile==8){
+rho0p=pkdGetDensityFromTable(&pkd->denTable,rpartp,rpartp,rpartp);
+//printf("rho0p %f ,r %f ",rho0p,rpartp);
+}
+p->fDensityTarget = rho0p;
+double hfact3 = 3.0*in->ICnSmoothMean*M_1_PI/(2.0*2.0*2.0*4.0);
+double htarget =  pow(p->fMass*hfact3/p->fDensityTarget,1.0/3.0);
+double ph = sqrt(0.25*p->fBall2);
+
+}
+  }
 }
 
 

@@ -1332,7 +1332,7 @@ int smResmoothParticle(SMX smx,SMF *smf,int pi,FLOAT fBall2,int cp,FLOAT lx,FLOA
         else {
             nCnt = smBallGatherNP(smx,fBall2,p[pi].r,ROOT);
             }
-        /*
+	/*
         ** Start non-local search.
         */
         x = p[pi].r[0];

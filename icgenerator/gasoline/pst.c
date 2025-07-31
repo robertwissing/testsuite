@@ -310,8 +310,11 @@ pstAddServices(PST pst,MDL mdl)
 		      0,0);
 	mdlAddService(mdl,PST_UPDATEDENSITY,pst,
 		      (void (*)(void *,void *,int,void *,int *)) pstUpdateDensity,
-		      0,0);
-        mdlAddService(mdl,PST_ICGETFMAX,pst,
+		      sizeof(struct inUpdateDensity),0);
+	mdlAddService(mdl,PST_INIT_DENSITYTABLE,pst,
+                      (void (*)(void *,void *,int,void *,int *)) pstInitDensityTable,
+                      0,0);
+     	mdlAddService(mdl,PST_ICGETFMAX,pst,
                       (void (*)(void *,void *,int,void *,int *)) pstICGetFmax,
                       sizeof(double),sizeof(struct outICGetFmax));
 	        mdlAddService(mdl,PST_ICNORMALIZEFMAX,pst,
@@ -4837,19 +4840,38 @@ void pstGetGasPressure(PST pst,void *vin,int nIn,void *vout,int *pnOut)
    if (pnOut) *pnOut = 0;
  }
 
+void pstInitDensityTable(PST pst, void *vin, int nIn, void *vout, int *pnOut)
+{
+    
+    if (pst->nLeaves > 1) {
+        mdlReqService(pst->mdl, pst->idUpper, PST_INIT_DENSITYTABLE, vin, nIn);
+        pstInitDensityTable(pst->pstLower, vin, nIn, NULL, NULL);
+        mdlGetReply(pst->mdl, pst->idUpper, NULL, NULL);
+    }
+    else {
+        pkdDensityTableInit(pst->plcl->pkd);
+    }
+    if (pnOut) *pnOut = 0;
+}
+
  void pstUpdateDensity(PST pst,void *vin,int nIn,void *vout,int *pnOut)
  {
    LCL *plcl = pst->plcl;
+   struct inUpdateDensity *in = vin;
+
+   mdlassert(pst->mdl,nIn == sizeof(struct inUpdateDensity));
+
    if (pst->nLeaves > 1) {
      mdlReqService(pst->mdl,pst->idUpper,PST_UPDATEDENSITY,vin,nIn);
      pstUpdateDensity(pst->pstLower,vin,nIn,NULL,NULL);
      mdlGetReply(pst->mdl,pst->idUpper,NULL,NULL);
    }
    else {
-     pkdUpdateDensity(plcl->pkd);
+      pkdUpdateDensity(plcl->pkd,&(in->g));
    }
    if (pnOut) *pnOut = 0;
  }
+
 
 void pstGetDensityU(PST pst,void *vin,int nIn,void *vout,int *pnOut)
 {

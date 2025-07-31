@@ -139,11 +139,11 @@ case OUT_UDOTANICOND_ARRAY:
 #endif
 #ifdef CHECKQUALITY
 case OUT_Q1_ARRAY:
-  //return(p->Q1);
-  return(p->ICfmax);
+  return(p->Q1);
+  //return(p->ICfmax);
 case OUT_Q2_ARRAY:
-  //return(sqrt((p->Q2x*p->Q2x+p->Q2y*p->Q2y+p->Q2z*p->Q2z)/3));
-  return(sqrt(p->ICvel[0]*p->ICvel[0] + p->ICvel[1]*p->ICvel[1] + p->ICvel[2]*p->ICvel[2]));
+  return(sqrt((p->Q2x*p->Q2x+p->Q2y*p->Q2y+p->Q2z*p->Q2z)/3));
+  //return(sqrt(p->ICvel[0]*p->ICvel[0] + p->ICvel[1]*p->ICvel[1] + p->ICvel[2]*p->ICvel[2]));
 case OUT_E0_ARRAY:
   return(sqrt((p->E0x*p->E0x+p->E0y*p->E0y+p->E0z*p->E0z)/3));
   // return(p->E0y);

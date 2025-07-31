@@ -1,0 +1,35 @@
+achInFile 	 = kh32_randrhodiff2.0smooth1.00000 
+achOutName 	 = kh32_randrhodiff2.0smooth1c
+bPeriodic 	 = 1 
+dxPeriod 	 = 1.0 
+dyPeriod 	 = 1.0 
+dzPeriod 	 = 0.30618621784789724 2 
+nSteps 	 = 3000
+dMsolUnit 	 = 1.0
+dKpcUnit 	 = 1.0
+iLogInterval 	 = 1
+iOutInterval     = 10000
+dMeanMolWeight 	 = 1.0 
+bGasAdiabatic 	 = 1 
+dConstGamma 	 = 1.6666666666666667
+bDoGravity 	 = 0 
+bStandard 	 = 1 
+bVDetails 	 = 2 
+nSmooth 	 = 64 
+dExtraStore 	 = 20.0 
+iBinaryOutput 	 = 1
+#How much to smooth density contrast
+dICdensRsmooth 	 = 0.025 
+
+#dICdensprofile = 1 Uniform dICdensprofile = 2 sharp dICdensprofile = 3 smoothed discontinuity
+#dICdensprofile > 4 <= 7 does accretion disk setups dICdensprofile > 7 takes 1D density table.
+dICdensprofile 	 = 3
+#1 |x| 2 |y| 3 |z| 4 r 5 rcyl 6 x 7 y 8 z
+dICdensdir 	 = 6
+#Size of Inner region
+dICdensR         = 0.0
+#dICdensR 	 = 0.25 
+#Inner density
+dICdensinner 	 = 2.0 
+#Outer density
+dICdensouter 	 = 1.0 

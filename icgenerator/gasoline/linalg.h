@@ -265,8 +265,7 @@ void InvertSymMatrix3x3(
              m12* (m12* m33- m23* m13)+ \
              m13* (m12* m23- m22* m13); \
     double idet; \
-    assert(det != 0); \
-    idet = 1/det; \
+    if(det > 0.0) {idet = 1/det;} else{idet = 0.0;} \
     im11= (m22* m33- m23* m23)* idet; \
     im12= (m13* m23- m12* m33)* idet; \
     im13= (m12* m23- m13* m22)* idet; \

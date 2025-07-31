@@ -175,6 +175,7 @@ enum pst_service {
       PST_UPDATEBDOT,
       PST_ISPHINVERTMATRIX,
       PST_UPDATEDENSITY,
+      PST_INIT_DENSITYTABLE,
       PST_ICGETFMAX,
       PST_ICNORMALIZEFMAX,
       PST_ICNORMALIZEVEL,
@@ -1221,6 +1222,10 @@ void pstSetNParts(PST, void *, int, void *, int *);
 
 #ifdef GASOLINE
 
+struct inUpdateDensity {
+    struct ICData g;
+	};
+
 struct inGetGasPressure {
 	enum GasModel iGasModel;
     struct GasPressureContext gpc;
@@ -1244,7 +1249,7 @@ void pstUpdateBDot(PST,void *,int,void *,int *);
 void pstISPHInvertMatrix(PST,void *,int,void *,int *);
 
 void pstUpdateDensity(PST,void *,int,void *,int *);
-
+void pstInitDensityTable(PST,void *,int,void *,int *);
 /* PST_ICGETFMAX */
 struct outICGetFmax {
   double fmax;

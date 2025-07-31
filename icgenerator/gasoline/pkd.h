@@ -127,6 +127,7 @@ typedef struct particle {
     FLOAT fPot;
     FLOAT fBall2;
     FLOAT fDensity;
+    FLOAT fDensityTarget;
     FLOAT dt;               /* a time step suggestion */
     FLOAT dtNew;            /* SPH new dt estimate */
     FLOAT dtOld;            /* SPH Old dt */
@@ -316,6 +317,7 @@ FLOAT Veff;
     FLOAT fDivv_Corrector;
     FLOAT fDivv_Corrector2;
     FLOAT Q1corr;
+    FLOAT nSmoothCheck;
     FLOAT fDensity_Corrector;
     FLOAT Eta_Factor;
 #ifdef SINKING
@@ -440,6 +442,26 @@ FLOAT Veff;
 
 #define GAMMA_JEANS    (2.0)
 #define GAMMA_NONCOOL  (5./3.)
+
+
+typedef struct DensityTable{
+    int dim;
+    int n;
+    float R;
+    float *axes[3];
+    float *densities;
+}DensityTable;
+
+struct ICData {
+    /* ICDATA */
+    int ICdensdir;
+    int ICdensprofile;
+    int ICnSmoothMean;
+    double ICdensR;
+    double ICdensouter;
+    double ICdensinner;
+    double ICdensRsmooth;
+};
 
 #ifdef GLASS
 struct GlassData {
@@ -798,6 +820,9 @@ typedef struct starLog
     SFEVENT *seTab;		/* The actual table */
     } STARLOG;
 
+
+
+
 enum SinkEventType {
     SINK_EVENT_NULL,
     SINK_EVENT_ACCRETE_AT_FORMATION,
@@ -903,6 +928,8 @@ typedef struct pkdContext {
 	/*
     ** Cooling
     */
+
+DensityTable denTable;  // Direct struct (not pointer)
 #ifndef NOCOOLING
 	COOL *Cool;
 #endif
@@ -1082,7 +1109,10 @@ void pkdDrift(PKD,double,FLOAT *,int,int,int,FLOAT,double);
 double pkduHotConvRate(PKD pkd, UHC uhc, FLOAT fBall2, double uHotPred, double uPred);
 void pkdUpdateuDot(PKD pkd, double duDelta, double dTime, double z, UHC uhc, int iGasModel, int bUpdateState );
 void pkdISPHInvertMatrix(PKD pkd);
-void pkdUpdateDensity(PKD pkd);
+void pkdUpdateDensity(PKD pkd, void *in);
+void pkdDensityTableInit(PKD pkd);
+double pkdGetDensityFromTable(DensityTable *table, float x, float y, float z);
+void pkdDensityTableFree(DensityTable *table);
 void pkdKick(PKD pkd, double dvFacOne, double dvFacTwo, double dvPredFacOne,
     double dvPredFacTwo, double duDelta, double duPredDelta, int iGasModel,
 	     double z, double duDotLimit, double dTimeEnd, UHC uhc, double dOrbFreq, int bOpen, double ICR0 );

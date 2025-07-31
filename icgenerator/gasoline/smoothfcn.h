@@ -124,9 +124,7 @@ typedef struct smfParameters {
   double fch;
 #endif
 #endif
-#ifdef RHOITERATIVE
   int nSmoothMean;
-#endif
 #ifdef ICGEN
   double ICfmax;
   double ICnSmooth;
