@@ -36,3 +36,7 @@ List of available simulations:
   shocktube          Different kinds of shock tubes.
                      (Enter 'shocktube' without arguments for more details on available options)
   sedov              Sedov-Taylor blast wave simulation.
+  evrard             Evrard collapse simulation.
+  polytrope          Polytrope / Oscillating Polytrope simulation (Requires additional graviational relaxation)
+  taylorgreen        Taylor-Green simulation.
+  areablob           Hydrostatic blob(s) simulation.

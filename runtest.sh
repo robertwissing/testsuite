@@ -59,7 +59,7 @@ usage() {
     echo "                     (Enter 'shocktube' without arguments for more details on available options)"
     echo "  sedov              Sedov-Taylor blast wave simulation."
     echo "  evrard             Evrard collapse simulation."
-    echo "  polytrope          Polytrope / Oscillating Polytrope simulation."
+    echo "  polytrope          Polytrope / Oscillating Polytrope simulation. (Requires additional graviational relaxation)"
     echo "  taylorgreen        Taylor-Green simulation."
     echo "  areablob           Hydrostatic blob(s) simulation."
     echo ""
