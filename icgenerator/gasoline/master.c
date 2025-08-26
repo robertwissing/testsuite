@@ -6420,7 +6420,12 @@ psmf->psidecfac=msr->param.dMHDPsidecFac;
 psmf->fch=msr->param.dMHDCleanFac;
 #endif
 #endif
- psmf->alp = msr->param.dalp;
+#ifdef WENDLAND
+    psmf->Wzero = (21/16.)*(1-0.0294*pow(nSmooth*0.01,-0.977));
+#endif
+
+#ifdef COMBOKERNEL
+psmf->alp = msr->param.dalp;
  psmf->alp2 = msr->param.dalp2;
  psmf->alp3 = msr->param.dalp3;
  psmf->alp4 = msr->param.dalp4;
@@ -7010,7 +7015,7 @@ else if(nSmooth <= 512){
  psmf->Wzero20 *= msr->param.dnloc;
  psmf->Wzero21 *= msr->param.dnloc;
  psmf->Wzero22 *= msr->param.dnloc;
-
+#endif
     psmf->nSmoothed = 0;
     psmf->nSmoothedInner = 0;
     psmf->nSmoothedFixh = 0;

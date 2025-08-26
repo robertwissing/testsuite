@@ -6,9 +6,9 @@ import IC_smoothlength as smth
 from numba import jit
 import readtipsy as tip
 class setup_shocktube(object):
-    dICdensRsmooth = 0.1
-    dICdensprofile = 1
-    dICdensdir = 1
+    dICdensRsmooth = 0.0
+    dICdensprofile = 3
+    dICdensdir = 6
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
@@ -59,7 +59,7 @@ class setup_shocktube(object):
     xshock=0.0
     shape=0
     tmax=0.2
-    extend=2.0
+    ti=2
     
     def __init__(self):
         pass
@@ -69,7 +69,7 @@ class setup_shocktube(object):
          dxleft = -xleft/nx
          self.xshock = 0.5*(xleft + xright)
 
-         self.dICdensprofile = 2
+         self.dICdensprofile = 3
          self.dICdensdir = 6
          self.dICdensR = self.xshock
          self.dICdensinner = self.leftstate[0]
@@ -81,13 +81,13 @@ class setup_shocktube(object):
         
          #3 set domain boundaries - use a longer box in x direction since
          # it is not actually periodic in x
-         distribute.setbound(self,self.extend*xleft,self.extend*xright,ymin,ymax,zmin,zmax)
+         distribute.setbound(self,self.ti*xleft,self.ti*xright,ymin,ymax,zmin,zmax)
          
          # set limits of the different domains
-         xminleft  = np.array([self.extend*xleft,ymin,zmin])
-         xmaxleft  = np.array([self.extend*xright,ymax,zmax])
-         xminright = np.array([self.extend*xleft,ymin,zmin])
-         xmaxright = np.array([self.extend*xright,ymax,zmax])  
+         xminleft  = np.array([self.ti*xleft,ymin,zmin])
+         xmaxleft  = np.array([self.ti*xright,ymax,zmax])
+         xminright = np.array([self.ti*xleft,ymin,zmin])
+         xmaxright = np.array([self.ti*xright,ymax,zmax])  
              
          #then divide the x axis into two halves at xshock
          xmaxleft[0]  = self.xshock
@@ -142,12 +142,13 @@ class setup_shocktube(object):
          rhozero = (self.leftstate[0]*np.prod(xmaxleft-xminleft) + self.rightstate[0]*np.prod(xmaxright - xminright)) + np.prod(xmaxright - xminleft)
          
          gam1 = self.gamma - 1.
+         print("RHOO ",self.rho)
          if (np.abs(gam1) > 1.e-3):
             uuleft  = self.leftstate[1]/(gam1*self.leftstate[0])
             uuright = self.rightstate[1]/(gam1*self.rightstate[0])
          else:
-            uuleft  = 3.*self.leftstate[1]/(2.*self.leftstate[0])
-            uuright = 3.*self.rightstate[1]/(2.*self.rightstate[0])
+            uuleft  = 3.*self.leftstate[1]/(2.*self.rho)
+            uuright = 3.*self.rightstate[1]/(2.*self.rho)
         
         
          for i in range(self.npart):
@@ -159,9 +160,9 @@ class setup_shocktube(object):
                    self.vy.append(self.rightstate[3]*np.exp(-8*(self.x[i]-lim)))
                    self.vz.append(self.rightstate[4]*np.exp(-8*(self.x[i]-lim)))
                 else:
-                   self.vx.append(self.rightstate[2])
-                   self.vy.append(self.rightstate[3])
-                   self.vz.append(self.rightstate[4])
+                   self.vx.append(self.rightstate[2]*self.rightstate[0]/self.rho[i])
+                   self.vy.append(self.rightstate[3]*self.rightstate[0]/self.rho[i])
+                   self.vz.append(self.rightstate[4]*self.rightstate[0]/self.rho[i])
                 self.u.append(uuright)
                 self.Bx.append(self.rightstate[5])
                 self.By.append(self.rightstate[6])
@@ -172,9 +173,9 @@ class setup_shocktube(object):
                    self.vy.append(self.leftstate[3]*np.exp(8*(lim+self.x[i])))
                    self.vz.append(self.leftstate[4]*np.exp(8*(lim+self.x[i])))
                 else:
-                   self.vx.append(self.leftstate[2])
-                   self.vy.append(self.leftstate[3])
-                   self.vz.append(self.leftstate[4])
+                   self.vx.append(self.leftstate[2]*self.rho[i]/self.leftstate[0])
+                   self.vy.append(self.leftstate[3]*self.rho[i]/self.leftstate[0])
+                   self.vz.append(self.leftstate[4]*self.rho[i]/self.leftstate[0])
                 self.u.append(uuleft)
                 self.Bx.append(self.leftstate[5])
                 self.By.append(self.leftstate[6])
@@ -191,6 +192,7 @@ class setup_shocktube(object):
              # try to give y boundary that is a multiple of 6 particle spacings in the low density part
             fac = -8*(int(1.99*2./6.) + 1)*max(dxleft,dxright)
             print("FACTOR",fac)
+            self.dICdensRsmooth = np.abs(fac*0.05);
             ymin   = fac*np.sqrt(0.75)
             zmin   = fac*np.sqrt(6.)/3.
             ymax  = -ymin
@@ -228,7 +230,6 @@ class setup_shocktube(object):
             if(choice==1):
                 #--Sod shock
                 shocktype = "Sod shock"
-                self.extend = 3.0
                 self.gamma      = 5./3.
                 self.deltastep=0.002
                 self.nsteps=100
@@ -237,16 +238,17 @@ class setup_shocktube(object):
             elif(choice==2):
                 #--Ryu et al. shock 1a
                 shocktype = "Ryu et al. shock 1a"
-                self.extend = 5.0
-                self.deltastep=0.0008
-                self.nsteps=100
+                self.tmax = 0.08
+                self.deltastep=0.00008
+                self.nsteps=1000
+                self.freqout=100
+                self.ti=4
                 self.gamma      =   5./3.
                 self.leftstate  = [1.,20.,10.,0.,0.,5./const,5./const,0.]
                 self.rightstate = [1.,1.,-10.,0.,0.,5./const,5./const,0.]
             elif(choice==3):
                 #--Ryu et al. shock 1b
                 shocktype = "Ryu et al. shock 1b"
-                self.extend = 2.0
                 self.gamma      =  5./3.
                 self.deltastep=0.0003
                 self.nsteps=200
@@ -255,7 +257,6 @@ class setup_shocktube(object):
             elif(choice==4):
                 #--Ryu et al. shock 2a
                 shocktype  = "Ryu et al. shock 2a"
-                self.extend = 2.0
                 self.deltastep=0.002
                 self.nsteps=100
                 self.gamma      = 5./3.
@@ -264,7 +265,6 @@ class setup_shocktube(object):
             elif(choice==5):
                 #--Ryu et al. shock 2b
                 shocktype = "Ryu et al. shock 2b"
-                self.extend = 2.0
                 self.gamma      = 5./3.
                 self.deltastep=0.00035
                 self.nsteps=100
@@ -273,7 +273,6 @@ class setup_shocktube(object):
             elif(choice==6):
                 #--Brio-Wu shock
                 shocktype = "Brio/Wu (Ryu/Jones shock 5a)"
-                self.extend = 2.0
                 self.gamma      = 2.0
                 self.deltastep=0.001
                 self.nsteps=100
@@ -282,7 +281,6 @@ class setup_shocktube(object):
             elif(choice==7):
                 #--C-shock
                 shocktype = "C-shock"
-                self.extend = 2.0
                 self.deltastep=0.0008
                 self.nsteps=1000
                 self.gamma      =  1.0
@@ -293,7 +291,6 @@ class setup_shocktube(object):
             elif(choice==8):
                 #--Steady shock (Falle 2003)
                 #nx         = 512
-                self.extend = 2.0
                 self.deltastep=0.0008
                 self.nsteps=1000
                 self.polyk      = 0.01
@@ -302,22 +299,19 @@ class setup_shocktube(object):
                 self.rightstate = [1.    ,0.01    ,-1.7510, 0.    ,0.,1.,0.6    ,0.]
                 xleft      = -2.0
                 #Toth 2000 shocktube
-            elif(choice==9):
-                self.extend = 2.0
+            elif(choice==9): 
                 self.gamma      = 5./3.
                 self.tmax = 0.08
-                self.deltastep=0.0008
-                self.nsteps=100
+                self.deltastep=0.00008
+                self.nsteps=1000
                 self.leftstate  = [1.,20.,10.,0.,0.,5./const,5/const, 0.]
                 self.rightstate = [1.,1.,-10.,0.,0.,5./const,5./const, 0.]
                 #MHD discontinuity shocktube
-            elif(choice==10):
-                self.extend = 2.0
+            elif(choice==10): 
                 self.gamma      = 5./3.
                 self.leftstate  = [1.,1.,0.,0.,0.,20./const,20./const, 0.]
                 self.rightstate = [1.,1.,0.,0.,0.,5./const,5./const, 0.]
             elif(choice==11):
-                self.extend = 2.0
                 self.gamma = 1.4
                 self.leftstate  = [1.,1000.,0.,0.,0.,0.,0., 0.]
                 self.rightstate = [1.,0.1,0.,0.,0.,0.,0., 0.]

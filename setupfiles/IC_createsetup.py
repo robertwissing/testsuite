@@ -1,6 +1,8 @@
 from IPython import get_ipython
 def __reset__(): get_ipython().magic('reset -sf')
 from IC_setup_orzag import setup_orzag
+from IC_setup_areablob import setup_areablob
+from IC_setup_polytrope import setup_polytrope
 from IC_setup_mhdrotor import setup_mhdrotor
 from IC_setup_mhddivtest import setup_mhddivtest
 from IC_setup_mhdblast import setup_mhdblast
@@ -13,6 +15,7 @@ from IC_setup_shocktube import setup_shocktube
 from IC_setup_mhdloop import setup_mhdloop
 from IC_setup_mhdloopshear import setup_mhdloopshear
 from IC_setup_cube import setup_cube
+from IC_setup_evrard import setup_evrard
 from IC_setup_accdisk import setup_accdisk
 from IC_setup_alfven import setup_alfven
 from IC_setup_cosmowave import setup_cosmowave
@@ -91,6 +94,9 @@ glasssetup = 0
 # Dictionary mapping simplified names to setup functions
 setup_functions = {
     'orzag': setup_orzag,
+    'evrard': setup_evrard,
+    'polytrope': setup_polytrope,
+    'areablob': setup_areablob,
     'mhdrotor': setup_mhdrotor,
     'mhddivtest': setup_mhddivtest,
     'mhdblast': setup_mhdblast,
@@ -144,7 +150,8 @@ else:
 
 
 n=float(sys.argv[2])
-fileinput = sys.argv[3] if len(sys.argv) > 3 else ""
+vm=float(sys.argv[3])
+fileinput = sys.argv[4] if len(sys.argv) > 4 else ""
 distri = 2 if fileinput else input("Enter wanted distribution (0: lattice 1: random): ")
 distri = 0 if fileinput == "0" else 1 if fileinput == "1" else distri
 
@@ -157,7 +164,7 @@ if distribution_name is None:
     sys.exit()
 
 default_output = f"{setup_case}_{n}_{distribution_name}"
-fileoutput = sys.argv[4] if len(sys.argv) > 4 else input(f"Enter fileoutput (default: {default_output}): ") or default_output
+fileoutput = sys.argv[5] if len(sys.argv) > 5 else input(f"Enter fileoutput (default: {default_output}): ") or default_output
 
 # Retrieve the signature of the create function
 sig = inspect.signature(sim.create)
@@ -165,14 +172,14 @@ sig = inspect.signature(sim.create)
 standard_args = {
     'nx': n,
     'distri': int(distri), 
-    'vm': 0,
+    'vm': vm,
     'entry': fileinput
 }
 # Determine extra arguments by filtering out standard arguments
 extra_args = {param.name: param.default for param in sig.parameters.values() if param.name not in standard_args}
 print("Default value of extra arguments in ", setup_case, "  ", extra_args)
 # Update extra_args with values from sys.argv, if provided
-argv_index = 5  # Starting index in sys.argv for extra arguments
+argv_index = 6  # Starting index in sys.argv for extra arguments
 for arg_name in extra_args.keys():
     if argv_index < len(sys.argv):  # Check if there are enough arguments provided
         # Convert the argument to the correct type (int, float, str, etc.)
@@ -200,6 +207,8 @@ sim.Bpsi=zero
 ## (data,kpc,msol,ifnottemp,phystocodevel,phystocodeB)
 if setup_case == 'mhdcollapse':
     sim=convertfromcodeunits(sim,0.001,1000,1,1,1)
+if setup_case == 'areablob':
+    sim=convertfromcodeunits(sim,1,1,0,0,0)
 else:
     sim=convertfromcodeunits(sim,1,1,1,0,0)
 

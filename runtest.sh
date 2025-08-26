@@ -7,28 +7,25 @@ ICdir=$current_dir/icgenerator/gasoline/
 gasolineicgen=gasoline.gdicgen
 analysisdir=$current_dir/setupfiles/
 
-NOALP=1
-
 # Directory where the executable(gasoline/changa) is and the name of it:
 
-#dir=/mn/stornext/u3/robertwi/Projects/RECON/gasolinenew/
-#gasolinerun=gasoline.mhd
-dir=$current_dir/../../
-gasolinerun=ChaNGa.smp
+dir=/mn/stornext/u3/robertwi/Projects/RECON/gasoline/
+gasolinerun=gasoline.mhd
+#dir=$current_dir/../../
+#gasolinerun=ChaNGa.smp
 
 #If running serial/mpi or with charmrun
-mpirun="$dir/charmrun.smp +p 63"
+#mpirun="$dir/charmrun.smp +p 63"
 #mpirun=""
-#mpirun="mpirun "
+mpirun="mpirun "
 
 #An extra word added at the end of the simulation output files and directory
-EXTRANAME="CHANGA"
+EXTRANAME=""
 
 #Specific config for glass generation. Can leave be, should work for all, but if sharper density is needed increase ICrhopow (though at the cost of higher zero order errors usually), ICR0 determines how much of the periodic box particles should move on average in beginning, can be set to 1, ensures that whatever IC you give it, it will go towards the target density (and remove long-range biases). Initially density gradients are bad and it can be hard for the partilces to correctly fit the large-scale density structure in one go, as such we quickly decay the speed and then increase it to some factor of the initial ICR0 this is eveventually reduced as we get closer to the target density. ICR0rate is how fast the global speed should decay. and -n 4800 is just a maximum relaxation number it usually relaxes within 200-1000 steps(depending on the other parameters and IC). and oi is output incase you want to see what is going on during relaxation.
 ICCONFIG="-ICR0 1.0 -n 4800 -oi 4800 -ICRLOOP0 0.5 -ICrhopow 2.0 -ICR0Rate 1.5"
 
 #Extra condition during runtime
-#EXTRACONDALL="-SpinEta 0.0  "
 EXTRACONDALL=""
 
 
@@ -61,6 +58,10 @@ usage() {
     echo "  shocktube          Different kinds of shock tubes."
     echo "                     (Enter 'shocktube' without arguments for more details on available options)"
     echo "  sedov              Sedov-Taylor blast wave simulation."
+    echo "  evrard             Evrard collapse simulation."
+    echo "  polytrope          Polytrope / Oscillating Polytrope simulation."
+    echo "  taylorgreen        Taylor-Green simulation."
+    echo "  areablob           Hydrostatic blob(s) simulation."
     echo ""
     exit 1
 }
@@ -365,6 +366,72 @@ setup_sedov() {
     runname_extra="select${select}beta${betain}ublast${ublast}"
 }
 
+# Function for alfven setup with generic parameters
+setup_evrard() {
+    # Set default values if not specifie
+    echo "Using settings for evrard collapse:"
+    # Setup based on the potentially updated values
+    EXTRACONDIC=" "
+    EXTRACONDRUN="$EXTRACONDALL "
+    prefile_extra=""
+    glassfile_extra="${GLASSNAME}"
+    runname_extra=""
+}
+
+# Function for alfven setup with generic parameters
+setup_polytrope() {
+        # Set default values if not specifie
+        echo "Using settings for polytrope:"
+        # Setup based on the potentially updated values
+        EXTRACONDIC=" "
+        EXTRACONDRUN="$EXTRACONDALL "
+        prefile_extra=""
+        glassfile_extra="${GLASSNAME}"
+        runname_extra=""
+}
+
+# Function for mhdcollapse setup with generic parameters
+setup_areablob() {
+    # Set default values if not specified
+    rhodiff=${args[0]:-1000}
+    multcloud=${args[1]:-1}
+
+    echo "mu is the magnetic flux ratio -a "
+    echo "rhodiff is the density difference between central cloud and medium -b "
+    echo "Erat is the rotational energy ratio -c "
+
+    echo "Final settings for MHD Collapse:"
+    echo "mu: $multcloud, rhodiff: $rhodiff"
+
+    # Setup based on the potentially updated values
+    EXTRACONDIC="$rhodiff $multcloud"
+    EXTRACONDRUN=" -n 900 -dt 0.0001 $EXTRACONDALL "
+    prefile_extra="mult${multcloud}rd${rhodiff}${GLASSNAME}"
+    glassfile_extra="mult${multcloud}rd${rhodiff}${GLASSNAME}"
+    runname_extra="mult${multcloud}rd${rhodiff}"
+}
+
+# Function for Orzag-Tang Vortex setup with generic parameters
+setup_taylorgreen() {
+    etavisc=${args[0]:-0.1}
+    xivisc=${args[1]:-0.0}
+    avisc=${args[2]:-0.05}
+    bvisc=${args[3]:-2}
+    # Set default values if not specified
+    echo "Using settings for Taylorgreen Vortex:"
+    echo "eta visc -a : $etavisc"
+    echo "xi visc -b : $xivisc"
+    echo "alpha visc -c : $avisc"
+    echo "beta visc -d : $bvisc"
+
+    # Setup based on the potentially updated values
+    EXTRACONDIC=" "
+    EXTRACONDRUN=" -PhysViscEta $etavisc -PhysViscXi $xivisc -beta $bvisc -alpha $avisc $EXTRACONDALL "
+    prefile_extra=""
+    glassfile_extra="${GLASSNAME}"
+    runname_extra=""
+}
+
 
 # Main execution block
 case $testsim in
@@ -397,6 +464,18 @@ case $testsim in
         ;;
     sedov)
         setup_sedov
+	;;
+    evrard)
+        setup_evrard
+        ;;
+    polytrope)
+        setup_polytrope
+        ;;
+    taylorgreen)
+        setup_taylorgreen
+        ;;
+    areablob)
+        setup_areablob
         ;;
     *)
         echo "Error: Unknown test simulation '$testsim'."
@@ -411,76 +490,11 @@ cd test_cases/$testsim
 
 CURRENT_DIR=$(pwd -P)
 
-if [ "$#" -lt 4 ]; then
-    echo "Usage: $0 <Nsmooth> <Nres> <0: lattice 1: rand 2: glass> < 1 isph else no isph > <kernel(see file for list of kernels)>"
+if [ "$#" -lt 3 ]; then
+    echo "Usage: $0 <Nsmooth> <Nres> <0: lattice 1: rand 2: glass> "
     exit 1
 fi
-echo $0 $1 $2 $3 $4 $5
-#Specifically for different SPH versions
-if [ "$4" -eq 1 ]; then
-is=isph
-fi
-if [ "$4" -eq 2 ]; then
-is=corrdens
-fi
-if [ "$4" -eq 3 ]; then
-is=corrdenssym
-fi
-if [ "$4" -eq 4 ]; then
-is=correntrop
-fi
-if [ "$4" -eq 5 ]; then
-is=corrdenssymisph
-fi
-if [ "$4" -eq 6 ]; then
-is=corrdenssymentrop
-fi
-if [ "$4" -eq 7 ]; then
-is=corrdensisph
-fi
-if [ "$4" -eq 8 ]; then
-is=corrdensentrop
-fi
-
-# Specifically done for special version of gasoline, which allow for easy changing of kernel
-kern_list=("32D" "64D" "128D" "256D" "32DIS" "64DIS" "128DIS" "256DIS" "32" "64" "128" "256" "CM04" "WuC2" "BUH" "CM05" "C2" "C4" "C6" "C8" "WuC4")
-alpha_values=(
-    "-alp14 1.0"
-    "-alp16 1.0"
-    "-alp18 1.0"
-    "-alp20 1.0"
-    "-alp15 1.0"
-    "-alp17 1.0"
-    "-alp19 1.0"
-    "-alp21 1.0"
-    "-alp 1.0"
-    "-alp2 1.0"
-    "-alp3 1.0"
-    "-alp4 1.0"
-    "-alp5 1.0"
-    "-alp6 1.0"
-    "-alp7 1.0"
-    "-alp8 1.0"
-    "-alp9 1.0"
-    "-alp10 1.0"
-    "-alp11 1.0"
-    "-alp12 1.0"
-    "-alp13 1.0"
-)
-
-if [[ -z $5 ]]; then
-    kern=""
-    alpha=""
-else
-if [[ $5 -ge 0 && $5 -lt ${#kern_list[@]} ]]; then
-    kern="${kern_list[$5]}"
-    alpha="${alpha_values[$5]}"
-    else
-    kern=""
-    alpha=""
-fi
-fi
-    echo $kern
+echo $0 $1 $2 $3
 
 # Set distribution and d1 based on the third command-line argument
 if [ "$3" -eq 0 ]; then
@@ -500,22 +514,25 @@ echo "RUNNING GLASS MODE"
     distri="rand"
     distri2="glass"
     d1=1
-    simfilename="$testsim$2_glassN$1KERN$kern${is}${runname_extra}-I"
+    simfilename="$testsim$2_glassN$1${runname_extra}-I"
     echo "$simfilename"
 fi
 
 prefile="$testsim$2_${distri}${prefile_extra}"
-glassfile_prefix="$testsim$2_glassN$1KERN$kern${is}${glassfile_extra}"
-ICfile="$simfilename"
-runname="$testsim$2_N$1${distri2}K$kern${is}${runname_extra}${EXTRANAME}"
+glassfile_prefix="$testsim$2_glassN$1${glassfile_extra}"
+ICfile="${simfilename}"
+runname="$testsim$2_N$1${distri2}${runname_extra}${EXTRANAME}"
 directory="initruns"
 glassfile="${directory}/${glassfile_prefix}"
 
 mkdir datafiles
 mkdir initruns
 
-
-if [[ $NOALP == 1 ]]; then alpha=""; fi
+if [ -z "$4" ] || [ "$4" -le 1 ]; then
+            vm=0.0
+    else
+                vm=$4
+fi
 
 
 
@@ -524,7 +541,7 @@ if [[ $NOALP == 1 ]]; then alpha=""; fi
         echo "File $prefile.00000 already exists. Skipping creation."
     else
     # File doesn't exist, create it
-    preIC="python ${analysisdir}/IC_createsetup.py $testsim $2 $d1 $prefile $EXTRACONDIC"
+    preIC="python ${analysisdir}/IC_createsetup.py $testsim $2 $vm $d1 $prefile $EXTRACONDIC"
     echo $preIC
     eval $preIC
     # Check if the command was successful
@@ -540,7 +557,7 @@ if [[ $NOALP == 1 ]]; then alpha=""; fi
     if [ -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
         echo "File ${glassfile}_IC already exists. Skipping creatin.."
     else
-	relaxglass=(mpirun -np $(($(nproc) / 2)) ${ICdir}/${gasolineicgen}$is -o $glassfile -I datafiles/$prefile.00000 -s $1 $alpha $ICCONFIG datafiles/$prefile.param)
+	relaxglass=(mpirun -np $(($(nproc) / 2)) ${ICdir}/${gasolineicgen} -o $glassfile -I datafiles/$prefile.00000 -s $1 $ICCONFIG datafiles/$prefile.param)
 	echo "${relaxglass[@]}"
 	"${relaxglass[@]}"
 
@@ -557,14 +574,14 @@ if [[ $NOALP == 1 ]]; then alpha=""; fi
 	echo "HIGHEST NUMBER ${highest_number_file}"
 	
 	echo "${directory}/${highest_number_file}" "${glassfile}_IC"
-	mv "${directory}/${highest_number_file}" "${glassfile}_IC"
+	cp "${directory}/${highest_number_file}" "${glassfile}_IC"
 
     fi
 
     if [ -f "datafiles/$ICfile.00000" ]; then
         echo "File $ICfile.00000 already exists. Skipping creation."
     else
-    ICfromglass="python ${analysisdir}/IC_createsetup.py $testsim $2 "${glassfile}_IC" ${ICfile} $EXTRACONDIC "
+    ICfromglass="python ${analysisdir}/IC_createsetup.py $testsim $2 $vm "${glassfile}_IC" ${ICfile} $EXTRACONDIC "
     echo $ICfromglass
     eval $ICfromglass
 
@@ -577,6 +594,6 @@ if [[ $NOALP == 1 ]]; then alpha=""; fi
     fi
     fi
     mkdir $runname
-    runline=( $mpirun $dir/${gasolinerun}$is -s $1 -o $runname/$runname -I datafiles/$ICfile.00000 $alpha $EXTRACONDRUN datafiles/$ICfile.param)
+    runline=( $mpirun $dir/${gasolinerun} -s $1 -o $runname/$runname -I datafiles/$ICfile.00000 $EXTRACONDRUN datafiles/$ICfile.param)
     echo "${runline[@]}"
     "${runline[@]}"

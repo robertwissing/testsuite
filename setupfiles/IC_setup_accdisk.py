@@ -80,13 +80,23 @@ class setup_accdisk(object):
          self.q = q;
          self.rorb = rorb;
          self.rdisk = rdisk;
+
+#        if(q < 2.0):
+#             self.dICdensinner = self.massdisk/2*np.pi*(rdisk**(2-q)-rinner**(2-q))/(2-q); #calculate normalization density from simple surface density R^(-qdisk)  
+#         elif(q==2.0):
+#             self.dICdensinner =self.massdisk/2*np.pi*(log(rdisk)-log(rinner));
+#         else:
+#             self.dICdensinner = self.massdisk/2*np.pi*(rinner**(2-q)-rdisk**(2-q))/(q-2);
+#         #--setup parameters
          if(q < 2.0):
-             self.dICdensinner = self.massdisk/2*pi*(rdisk**(2-q)-rinner**(2-q))/(2-q); #calculate normalization density from simple surface density R^(-qdisk)  
-         elif(q==2.0):
-             self.dICdensinner =self.massdisk/2*pi*(log(rdisk)-log(rinner));
+            integral = (rdisk**(2 - q) - rinner**(2 - q)) / (2 - q)
+            self.dICdensinner = self.massdisk * (2 - q) / (2 * np.pi * integral)
+         elif(q == 2.0):
+            log_term = np.log(rdisk) - np.log(rinner)
+            self.dICdensinner = self.massdisk / (2 * np.pi * log_term)
          else:
-             self.dICdensinner = self.massdisk/2*pi*(rinner**(2-q)-rdisk**(2-q))/(q-2);
-         #--setup parameters
+            integral = (rinner**(2 - q) - rdisk**(2 - q)) / (q - 2)
+            self.dICdensinner = self.massdisk * (q - 2) / (2 * np.pi * integral)
          #self.masszero=1.0
          #cs0 is same as scaleheight h/r and = 1/mach vorb=r**(-q)
          #P=cs0*density*r**(-q)
@@ -101,7 +111,23 @@ class setup_accdisk(object):
          elif distri==1:
             distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
          else:
-            tgdata,tddata,tsdata,data_header,time=tip.readtipsy(entry);
+            tgdatain,tddata,tsdata,data_header,time=tip.readtipsy(entry);
+            #mapp = np.any([tgdatain[:,7] > self.dICdensouter,tgdatain[:,1]**2 + tgdatain[:,2]**2 > self.dICdensRsmooth**2], axis=0)
+            rcyl=np.sqrt(tgdatain[:,1]**2 + tgdatain[:,2]**2)
+            hin = tgdatain[:,9];
+            fMass = tgdatain[:,0];
+            Hdisk=self.dICdensRsmooth * rcyl;
+            rhocentral = self.dICdensinner*rcyl**(-self.q) /(Hdisk*np.sqrt(2*np.pi));
+            hcentral = (fMass / rhocentral)**(1.0/3.0)
+            ttres = Hdisk / hcentral
+            hedge = (fMass / rhocentral*np.exp(ttres**2/2.0))**(1.0/3.0)
+            z_abs = np.abs(tgdatain[:,3])
+            mapp = (tgdatain[:,7] > self.dICdensouter) & \
+                           (tgdatain[:,1]**2 + tgdatain[:,2]**2 > rinner**2) & \
+                           (z_abs < ttres*Hdisk+hedge)
+            #    (tgdatain[:,1]**2 + tgdatain[:,2]**2 < rdisk**2)
+            tgdata=tgdatain[mapp,:]
+            #tgdata=tgdatain
             self.x=tgdata[:,1]
             self.y=tgdata[:,2]
             self.z=tgdata[:,3]
@@ -127,7 +153,7 @@ class setup_accdisk(object):
              self.Bx.append(0.)
              self.By.append(0.)
              self.Bz.append(0.)
-             self.h.append(hr*0.6*1E-6) ## 1E-6 times smaller than secondary BH
+             self.h.append(hr*0.006) ## 1/100 of secondary BH
              
     def getrhoi(self,i):
         return self.rhozero

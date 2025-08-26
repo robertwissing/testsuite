@@ -6175,7 +6175,8 @@ nSmoothNew=nSmoothNew+1;
     double boundterm=sqrt((Q1x*Q1x+Q1y*Q1y+Q1z*Q1z)/3.0)/(Q0b*Q0b);
     double boundterm0=0.005;
     double n = 1.0;
-    double k = -log(0.55)/pow((0.3944-boundterm0),n);
+    double k = -log(0.55)/pow((0.3944-boundterm0),n); //upper
+    //double k = -log(0.3410)/pow((0.5702-boundterm0),n); //lower
     double Q_tgt = (boundterm <= boundterm0) ? 1.0 : exp(-k * pow((boundterm - boundterm0),n));
     double Qfix = Q1;
     //Qfix = 1.0-Q_tgt+Q1;

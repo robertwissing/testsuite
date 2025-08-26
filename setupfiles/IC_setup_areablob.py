@@ -6,13 +6,19 @@ import IC_fixdens as fixdens
 import IC_smoothlength as smth
 from numba import njit
 import readtipsy as tip
-class setup_mhdcollapse(object):
-    dICdensRsmooth = 0.0015
+class setup_areablob(object):
+    #dICdensRsmooth = 0.001
+    #dICdensprofile = 3
+    #dICdensdir = 4
+    #dICdensR = 0.015
+    #dICdensinner = 360.0
+    #dICdensouter = 1.0
+    dICdensinner = 1000.0
+    dICdensouter = 1.0
     dICdensprofile = 3
     dICdensdir = 4
-    dICdensR = 0.015
-    dICdensinner = 360.0
-    dICdensouter = 1.0
+    dICdensRsmooth = 0.0075
+    dICdensR = 0.05
     npart=0
     rhoit=0
     ns=64
@@ -26,8 +32,8 @@ class setup_mhdcollapse(object):
     deltastep=0.0001
     freqout=10
     nsteps=1100
-    dmsolunit=10**3
-    dkpcunit=10**(-3)
+    dmsolunit=1.0
+    dkpcunit=1.0
     adi=0
     grav=1
     shape = 0
@@ -66,7 +72,7 @@ class setup_mhdcollapse(object):
 
     def __init__(self):
         pass
-    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',mu=10,rhodiff=360.0,EkoverEp=0.045):
+    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',rhodiff=360.0,multcloud=1):
          """Create particle distribution for MHDCollapse.
 
          Parameters:
@@ -78,29 +84,22 @@ class setup_mhdcollapse(object):
          """ 
          gam1=self.gamma-1
          #--setup parameters
-         
-         kpctounit=self.dkpcunit
-         msoltounit=self.dmsolunit
-         self.Rin=self.dICdensR*10**(-3)*kpctounit # pc
-         Mtot=1.0 # solar mass
-         self.rhoin= Mtot/(4/3*np.pi*self.Rin**3) #msol/pc3
+         self.Rin=self.dICdensR
+         self.rhoin= rhodiff #msol/pc3
          self.rhoout=self.rhoin/rhodiff
 
          self.dICdensinner=self.rhoin
          self.dICdensouter=self.rhoout
-
-         P = 4.7*10**5 #period yrs
-         yrstosec=31556926
-         w=(2*np.pi/(P*yrstosec))*(EkoverEp/0.045)**2 # angular momentum in rad/sec
-         Bzero=610/mu*10**(-6) #gauss
-         
+         self.dICdensRsmooth=0.0
          # boundaries
-         dz=0.075*10**(-3)*kpctounit #pc
-         dy=0.075*10**(-3)*kpctounit
-         dx=0.075*10**(-3)*kpctounit
-         
+         fac=2.0
+
+         dz = 0.5*fac
+         dy = (0.5/multcloud)
+         dx = (0.5/multcloud)
+         print(multcloud)
          distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
-         deltax = self.dxbound/nx
+         deltax = (self.dxbound)/nx
          deltasphere = deltax*(self.rhoout/self.rhoin)**(1./3.)
          self.rmin2=self.Rin**2
          
@@ -123,12 +122,36 @@ class setup_mhdcollapse(object):
              self.y=tgdata[:,2]
              self.z=tgdata[:,3]
              self.rho=tgdata[:,7]
-             
+        
+         if multcloud > 1 and not distri==1:
+            term = (np.arange(multcloud) - (multcloud-1)/2)
+            x_offsets = term * self.dxbound
+            y_offsets = term * self.dybound
+            xx, yy = np.meshgrid(x_offsets, y_offsets)
+            offsets = np.column_stack((xx.ravel(), yy.ravel()))
+            # Initialize lists to hold all replicated points
+            all_x = []
+            all_y = []
+            all_z = []
+            all_rho = []
+            # Create the replicas
+            for dx, dy in offsets:
+                all_x.append(self.x + dx)
+                all_y.append(self.y + dy)
+                all_z.append(self.z)  # z stays the same
+                all_rho.append(self.rho)  # z stays the same
+            # Combine all replicas into single arrays
+            self.x = np.concatenate(all_x)
+            self.y = np.concatenate(all_y)
+            self.z = np.concatenate(all_z)
+            self.rho = np.concatenate(all_rho)
+            self.dxbound *= multcloud;
+            self.dybound *= multcloud;
          self.npart=len(self.x)
          self.ngas=self.npart
-         totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound + (self.rhoin-self.rhoout)*4/3*np.pi*self.Rin**3)
+         totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound + (multcloud**2)*(self.rhoin-self.rhoout)*4/3*np.pi*self.Rin**3)
          self.mass = [totmass/self.npart]*self.npart
-         
+         print(self.dxbound,self.dybound,self.dzbound,self.npart)
          if vm==1:
              print("Varying masses -> ONLY FOR RAND + RELAXING TO GLASS");              
              for i in range(0,self.npart,2):
@@ -136,54 +159,20 @@ class setup_mhdcollapse(object):
                  self.mass[i]=self.mass[i]+dmrat
                  self.mass[i+1]=self.mass[i+1]-dmrat
 
-         sphmass = (self.npart-npartout)*self.mass[1]/msoltounit
-         print('npart = ',self.npart,'npartcloud = ',self.npart-npartout,' n ' , (self.npart-npartout)**(1./3.),' particle mass = ',self.mass[1], ' totmass = ', totmass, ' sphere mass in solar mass = ',sphmass )
-         kpctoau=206264806/kpctounit
-         rhosm=(1.0/(5.0/kpctoau)**3)*(self.npart**2/436396**2)
-         hsm2=1.0/rhosm**(1./3.)
-         rhoc=10**-12
-         msoltog=1.989e+33
-         hsm=(((np.mean(self.mass)/msoltounit)*msoltog/rhoc)**(1./3.))*3.24078e-22*kpctounit
-         print(hsm*kpctoau/kpctounit,hsm2*kpctoau/kpctounit)
-         print(hsm,hsm2)
          
-         #hsm=(5.0/kpctoau)
          for i in range(self.npart):
-             radius2 = self.x[i]**2 + self.y[i]**2+self.z[i]**2
-             radvec=(self.x[i],self.y[i],self.z[i])
-             wvec=(0,0,w)
-             velvec=np.cross(wvec,radvec)
-             #velvec in lengthunit/s
-             if (radius2 < self.Rin**2):
-                #self.u.append(self.getP(self.rhoin)/(gam1*self.rhoin))
-                self.vx.append(velvec[0])
-                self.vy.append(velvec[1])
-                self.vz.append(velvec[2])
+             self.vx.append(0.)
+             self.vy.append(0.)
+             self.vz.append(0.)
+             if (np.abs(self.z[i]) > 0.75):
+                 self.u.append(1E-10)
              else:
-                #self.u.append(self.getP(self.rhoout)/(gam1*self.rhoout))
-                self.vx.append(0.)
-                self.vy.append(0.)
-                self.vz.append(0.)
-             self.u.append(1.0/self.rho[i])
+                 self.u.append(1.0/self.rho[i])
              self.Bx.append(0.)
              self.By.append(0.)
-             self.Bz.append(Bzero)
-             self.h.append(hsm)
+             self.Bz.append(0.)
+             self.h.append((self.mass[i]/self.rho[i])**0.3333333)
         
-         
-         gtosol = 5.0279933*10**(-34)*self.dmsolunit
-         kmtokpc= 3.24077929*10**(-17)*self.dkpcunit
-         cmtokpc=3.24077929*10**(-22)*self.dkpcunit
-         print(10**(-14)*gtosol/cmtokpc**3)
-         print((self.rhoin)/(10**(-14)*gtosol/cmtokpc**3))
-         print((self.rhoout)/(10**(-14)*gtosol/cmtokpc**3))
-         print(self.getP(self.rhoout)/(gam1*self.rhoout))
-        
-         
-         print(velvec[0])
-         print(0.2*kmtokpc*14877722399232.906)
-         print("CLOUD DENSITY g/cm**3 ", self.rhoin*cmtokpc**3/gtosol)
-         
     def getrhoi(self,i):
         radius2=self.x[i]**2 + self.y[i]**2+self.z[i]**2
         rpartp = np.sqrt(radius2)

@@ -15,6 +15,8 @@ def createparamfile(filename,dxP,dyP,dzP,periodic,delta,nsteps,dmsol,dkpc,out,ad
     f = open('datafiles/' + filename+'.param', 'w')
     f.write('achInFile \t = '+ filename + '.00000' +' \n')
     f.write('achOutName \t = '+ filename + ' \n')
+    if(glasssetup==1):
+        periodic=1
     if(periodic==1):
         f.write('bPeriodic \t = 1 \n')
         f.write('dxPeriod \t = '+ str(dxP) + ' \n')

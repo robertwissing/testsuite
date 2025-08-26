@@ -7487,10 +7487,16 @@ void pkdUpdateDensity(PKD pkd,void *vin)
 }
      rho0p = sigmadisk; 
    }
-
 if(in->ICdensprofile==8){
 rho0p=pkdGetDensityFromTable(&pkd->denTable,rpartp,rpartp,rpartp);
 //printf("rho0p %f ,r %f ",rho0p,rpartp);
+}
+if(in->ICdensprofile==9){
+FLOAT zp = rpartp;
+FLOAT Hdisk = in->ICdensRsmooth;
+FLOAT mindens = in->ICdensouter;
+rho0p = in->ICdensinner*exp(-zp*zp/(2*Hdisk*Hdisk));
+rho0p = ((rho0p < mindens) ? mindens : rho0p);
 }
 p->fDensityTarget = rho0p;
 double hfact3 = 3.0*in->ICnSmoothMean*M_1_PI/(2.0*2.0*2.0*4.0);

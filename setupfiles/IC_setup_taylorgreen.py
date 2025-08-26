@@ -10,7 +10,7 @@ import IC_distribute as distribute
 import IC_fixdens as fixdens
 import IC_smoothlength as smth
 from numba import njit
-
+import readtipsy as tip
 
 class setup_taylorgreen(object):
     dICdensRsmooth = 0.1
@@ -20,6 +20,7 @@ class setup_taylorgreen(object):
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
     rhoit=0
+    ns=64
     npart=0
     ngas=0
     ndark=0
@@ -29,6 +30,7 @@ class setup_taylorgreen(object):
     gamma=5./3.
     deltastep=0.01
     periodic=1
+    freqout=20
     nsteps=200
     dmsolunit=1.0
     dkpcunit=1.0
@@ -80,15 +82,32 @@ class setup_taylorgreen(object):
         dz=2*np.sqrt(6)*deltax
         #dz=dx/4
         distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
-        #distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
-        distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
-        #distribute.setcubicdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        if distri==0:
+            distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        elif distri==1:
+            distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        else:
+            tgdata,tddata,tsdata,data_header,time=tip.readtipsy(entry);
+            self.x=tgdata[:,1]
+            self.y=tgdata[:,2]
+            self.z=tgdata[:,3]
+            self.rho=tgdata[:,7]
+        #zz=dx/4
         self.npart=len(self.x)
         self.ngas=self.npart
         totmass = self.dxbound*self.dybound*self.dzbound*self.rhozero
         self.mass = [totmass/self.npart]*self.npart
+        if vm==1:
+            print("Varying masses -> ONLY FOR RAND + RELAXING TO GLASS");              
+            for i in range(0,self.npart,2):
+                dmrat=0.25*self.mass[i]*np.random.rand()
+                self.mass[i]=self.mass[i]+dmrat
+                self.mass[i+1]=self.mass[i+1]-dmrat
+                
         self.h=smth.getsmooth(self,200)
         print('npart = ',self.npart,' particle mass = ',self.mass[0],' total mass = ',totmass)
+        
+        
   
         for i in range(self.npart):
             cx=2*np.pi*self.x[i]

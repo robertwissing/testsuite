@@ -67,10 +67,10 @@ class setup_gresho(object):
     rhozero=1.
     shape=2
     przero=5.0
-    
+    kmag = 1.0
     def __init__(self):
         pass
-    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',mach=np.sqrt(3/25)):
+    def create(self,nx,distri=0,vm=0.0,entry='datafiles/alfvenwave128_preglass.00000',mach=np.sqrt(3/25),beta=10e6):
         self.przero = 1/(self.gamma*mach**2)
         self.deltastep=self.deltastep*(mach/np.sqrt(3/25))
         gam1 = self.gamma-1
@@ -92,33 +92,81 @@ class setup_gresho(object):
             self.x=tgdata[:,1]
             self.y=tgdata[:,2]
             self.z=tgdata[:,3]
-            self.rho=tgdata[:,7]            
+            self.rho=tgdata[:,7]
+            self.mass=tgdata[:,0]
         self.npart=len(self.x)
         self.ngas=self.npart
         totmass = self.dxbound*self.dybound*self.dzbound*self.rhozero
-        self.mass = [totmass/self.npart]*self.npart
-        if vm==1:
-            print("Varying masses -> ONLY FOR RAND + RELAXING TO GLASS");              
-            for i in range(0,self.npart,2):
-                dmrat=0.25*self.mass[i]*np.random.rand()
-                self.mass[i]=self.mass[i]+dmrat
-                self.mass[i+1]=self.mass[i+1]-dmrat
+        if distri != 2:
+            self.mass = [totmass/self.npart]*self.npart
+            
+            if vm > 1.0 or vm < -1.0:
+                print("Varying masses -> ONLY FOR RAND + RELAXING TO GLASS");              
+                for i in range(0,self.npart,2):
+                    #max mass - min mass * random
+                    #dmrat=(vm*self.mass[i]-(1.0/vm)*self.mass[i])*np.random.rand()
+                    total_mass = self.mass[i] + self.mass[i+1]
+                    # Calculate allowable mass range for each particle to respect max_ratio
+                    min_mass = total_mass / (1 + np.abs(vm))  # Minimum allowed mass for either particle
+                    max_mass = total_mass - min_mass         # Maximum allowed mass 
+                    if (vm > 1.0):
+                        # Randomly redistribute mass within [min_mass, max_mass]
+                        m1 = np.random.uniform(min_mass, max_mass)
+                    else:
+                        m1 = max_mass
+                    m2 = total_mass - m1
+
+                    self.mass[i]=m1
+                    self.mass[i+1]=m2
         self.h=smth.getsmooth(self,200)
         print('npart = ',self.npart,' particle mass = ',self.mass[0],' total mass = ',totmass)
-  
+        self.kmag = np.sqrt(self.getpress(0.2)/( (1+beta)*0.5*self.getBform(0.2)**2 ))
+        
         for i in range(self.npart):
             vxi,vyi,vzi = self.getveli(i)
             self.vx.append(vxi)
             self.vy.append(vyi)
             self.vz.append(vzi)
-            self.Bx.append(0.)
-            self.By.append(0.)
-            self.Bz.append(0.)
-            self.u.append(self.getpressi(i)/(gam1*self.getrhoi(i)))
+            Bxi,Byi,Bzi = self.getBi(i)
+            Ptot = self.getpressi(i)
+            Pmag = (Bxi**2+Byi**2+Bzi**2)*0.5
+            Pth = Ptot-Pmag
+            if Pth < 0.0:
+                print(Pth,rcyl)
+            self.Bx.append(Bxi)
+            self.By.append(Byi)
+            self.Bz.append(Bzi)
+            self.u.append(Pth/(gam1*self.getrhoi(i)))
             self.rho[i]=self.getrhoi(i)
 
     def getrho(self,x):
         return self.rhozero
+
+    def getBform(self,rcyl):
+        select=3
+        if(select==1):
+            Bform =np.exp(-5*(rcyl-0.2)**2)*np.sin(2.5*np.pi*rcyl)
+            if (rcyl>=0.4):
+                Bform = 0.0
+        if(select==2):
+            Bform = rcyl**2*(rcyl-0.4)**2
+            if (rcyl>=0.4):
+                Bform = 0.0
+        if(select==3):
+            if(rcyl<=0.2):
+                Bform=5*rcyl
+            elif(rcyl<=0.4):
+                Bform=2.0-5.0*rcyl
+            else:
+                Bform=0.0
+        return Bform; 
+
+    def getBi(self,i):
+        rcyl=np.sqrt(self.x[i]*self.x[i]+self.y[i]*self.y[i])
+        Bazi = self.kmag*self.getBform(rcyl)
+        Bx,By,Bz = self.transform_coordinate(0.0,Bazi,0.0,self.x[i],self.y[i],self.z[i],"cyl","cart")
+
+        return Bx,By,Bz
 
     def getveli(self,i):
         rcyl=np.sqrt(self.x[i]*self.x[i]+self.y[i]*self.y[i])
@@ -130,7 +178,16 @@ class setup_gresho(object):
             vazi=0.0
         vx,vy,vz = self.transform_coordinate(0.0,vazi,0.0,self.x[i],self.y[i],self.z[i],"cyl","cart")
         return vx,vy,vz
-    
+
+    def getpress(self,rcyl):
+        if(rcyl<=0.2):
+            P=self.przero + 12.5*rcyl**2
+        elif(rcyl<=0.4):
+            P=self.przero+4.0+12.5*rcyl**2 - 20.0*rcyl + 4*np.log(5*rcyl)
+        else:
+            P=self.przero-2.0+4*np.log(2)
+        return P
+
     def getpressi(self,i):
         rcyl=np.sqrt(self.x[i]*self.x[i]+self.y[i]*self.y[i])
         if(rcyl<=0.2):
