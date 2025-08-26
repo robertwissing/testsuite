@@ -126,8 +126,7 @@ class setup_polytrope(object):
          deltax = self.dxbound/nx
          print('DISTRI: ',distri)
          if distri==0:
-             print"DOES NOT WORK WITH LATTICE SETUP AT THE MOMENT (add stretch mapping)")
-             exit
+             raise SystemExit("DOES NOT WORK WITH LATTICE SETUP AT THE MOMENT (add stretch mapping)")
              distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
          elif distri==1:
             distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)            

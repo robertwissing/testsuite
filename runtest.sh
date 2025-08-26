@@ -537,7 +537,7 @@ fi
 
 
     # Check if the file already exists
-    if [ -f "datafiles/$prefile.00000" -o -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
+    if [ -f "datafiles/$prefile.00000" ]; then
         echo "File $prefile.00000 already exists. Skipping creation."
     else
     # File doesn't exist, create it
