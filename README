@@ -123,9 +123,31 @@ Field-map rendering and movies:
   --movie               animate each field map over ALL snapshots (mp4 via
                         ffmpeg, else gif); combine with --reference for a
                         sim | reference | difference movie
-  With --reference, --render draws sim | reference | (sim - reference) panels.
+  --residual            residual render grids (implies --render):
+                        with ONE run + --reference, draws
+                        sim | reference | (sim - reference) panels from the
+                        blessed render grids; with TWO runs (no reference
+                        needed), draws run1 | run2 | (run1 - run2),
+                        differencing the runs directly on the same grid.
+                        More than two runs is an error.
 
 Convergence (tests that support it -- alfven, gresho, wave, isentropicvortex,
 coldkeplerian, mhdisowave): pass several runs at different resolutions plus
 --convergence to plot the error vs n_x against the ideal n_x^-2 line, e.g.
   python setupfiles/IC_analysis_gresho.py <dir_N32> <dir_N64> <dir_N128> --convergence
+
+Converting between tipsy and SPH-EXA
+------------------------------------
+
+tipsy -> SPH-EXA (convert an IC for an SPH-EXA run):
+  python setupfiles/ICconvert_tipsytosphexa.py <tipsy-IC> <output>
+Writes <output>.h5 (SPH-EXA Step#0 layout). The matching <name>.param must sit
+next to the IC (box, gamma, EOS, gravity are read from it); a non-zero
+.BFieldx/y/z aux makes it an MHD datafile (magneto::* fields).
+
+SPH-EXA -> tipsy (convert a finished SPH-EXA run for analysis):
+  python setupfiles/ICconvert_sphexatotipsy.py <run.h5> <runname> <idx_interval>
+Writes tipsy snapshots <runname>/<runname>.<idx> (idx = (N+1)*idx_interval;
+pick the interval to match the gasoline numbering, e.g. 10 -> .00010, .00020),
+the B-field/divB aux (.BFieldx/y/z, .DivB), and converts constants.txt (cwd or
+<runname>/) into a gasoline-style .log with the box in the header.
