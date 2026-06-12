@@ -20,6 +20,7 @@ class setup_taylorgreen(object):
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
     rhoit=0
+    inflow=0
     ns=64
     npart=0
     ngas=0
@@ -70,7 +71,7 @@ class setup_taylorgreen(object):
     
     def __init__(self):
         pass
-    def create(self,nx,v0=0.1,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000'):
+    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',v0=0.1):
         przero = 1
         gam1 = self.gamma-1
         print('Setup for Taylor–Green vortex.. Isothermal')

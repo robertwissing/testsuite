@@ -60,6 +60,7 @@ class setup_cosmowave(object):
     rmin2= 0
     rcylmax2= 10**22
     rmax2= 10**22
+    _rho_z_grid=None
     wk=0.
     x0=0.
     xdot0=0.
@@ -71,22 +72,29 @@ class setup_cosmowave(object):
     kappa=1.
     def __init__(self):
         pass
-    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',trav=1,rotate=0,Lboxinkpc=1,zi=1.0):
-        if(rotate==1):           
-            sina = 2./3.
-            sinb = 2./np.sqrt(5.)
-            cosa = np.sqrt(5.)/3.
-            cosb = 1./np.sqrt(5.)
-        else:
-            sina = 0.
-            sinb = 0.
-            cosa = 1.
-            cosb = 1.
-        runit = (cosa*cosb,cosa*sinb,sina)
+    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',case=3,factor_A=1,factor_G=0):
+        # case selects one of the unique test setups from Berlok 2022 (MNRAS 515 3492):
+        #   0 = standing Alfven wave           (paper Sec. 5.1.1, eqs. 75, 76)
+        #   1 = traveling Alfven wave          (paper Sec. 5.1.2, eqs. 79, 80; n=2)
+        #   2 = standing compressible wave     (paper Sec. 5.2.1/2/3, eqs. 81, 82)
+        #   3 = traveling compressible gamma=4/3 (paper Sec. 5.2.1, eqs. 83, 84; n=3)
+        #   4 = divergence-cleaning test in EdS (this work):
+        #       Linearized Tricco et al. 2016 eqs. 23-24 with v=0, transformed to
+        #       comoving (B = B_c/a^2, gradient picks up 1/a). The induction eq.
+        #       acquires a +2(adot/a) dB_c Hubble drag; substituting dB_c = a^2 g(a)
+        #       gives a g'' + (1/2) g' + Omega_h^2 g = 0, which under u = 2*Omega_h*sqrt(a)
+        #       reduces to g'' + g = 0. Hyperbolic-only (tau -> inf) closed form:
+        #         dB_c (x,a) = (a/a_i)^2 * dB_c_i * cos[2*Omega_h*(sqrt(a)-sqrt(a_i))] * sin(k(x-x0))
+        #         dB_phys(x,a) =          dB_phys_i * cos[2*Omega_h*(sqrt(a)-sqrt(a_i))] * sin(k(x-x0))
+        #       i.e. physical divergence amplitude is bounded; comoving grows as (a/a_i)^2.
+        #       Omega_h = k * c_h / H_0 using the code's run-time c_h.
+        #       IC: B0 along z, dBx = A_u*B0*sin(k(x-x0)), psi(a_i)=0, v=0, drho=0.
+        # factor_A, factor_G scale the paper-default frequencies:
+        #   omega_A = factor_A * pi    (0 = MHD off; 1 = paper default)
+        #   omega_G = factor_G * pi/2  (0 = self-gravity off; 1 = paper default)
+        # omega_S stays at pi (paper baseline).
         self.drho = 0
         #self.rhozero  = 1.-self.drho-0.000005
-        self.dkpcunit=Lboxinkpc
-        ascale=1./(1.+zi)
         """
         #dimensionless amplitude Au=10**-6
         #wavenumber kL=2pi k=2pi
@@ -132,10 +140,9 @@ class setup_cosmowave(object):
         deltax = wavelength/nx
         A_u = 10**(-1)
 
-        omega_A = np.pi
+        omega_A = factor_A * np.pi
         omega_S = np.pi
-        omega_G = 0.0
-        #omega_G = np.pi/2
+        omega_G = factor_G * np.pi/2
         
         self.gamma=4./3.
 
@@ -145,16 +152,29 @@ class setup_cosmowave(object):
         print("V_a ",V_A,"V_S ",V_S,"V_G ",V_G)
         
         sigma=np.sqrt(omega_A**2+omega_S**2-omega_G**2)
-        
+
         kappa=np.sqrt(sigma**2-1./16.)
         self.kappa=kappa
-        if trav==0:
-            """ Standing wave """
-            a=1/128 
+        kappa_A=np.sqrt(omega_A**2-1./16.)
+        self.kappa_A=kappa_A
+        alfven = case in (0,1)
+        if case == 0:
+            """ standing Alfven (paper 5.1.1) """
+            a = 1./128.
+        elif case == 1:
+            """ traveling Alfven (paper 5.1.2), n=2 """
+            n = 2
+            a = np.exp(-2*n*np.pi/kappa_A)
+        elif case == 2:
+            """ standing compressible (paper 5.2.1/2/3) """
+            a = 1./128.
+        elif case == 4:
+            """ divergence-cleaning test (this work) """
+            a = 1./128.
         else:
-            """ Moving wave """
-            n=3
-            a=np.exp(-2*n*np.pi/kappa)
+            """ traveling compressible gamma=4/3 (paper 5.2.1), n=3 """
+            n = 3
+            a = np.exp(-2*n*np.pi/kappa)
         self.a=a
         phi=kappa*np.log(1) #log(a/a_i)
         if omega_G > 0:
@@ -171,8 +191,8 @@ class setup_cosmowave(object):
         #uzero=V_A*A_u*a**(-1)
         #cs=uzero*10
         
-        """ Compressible """
-        uzero=V_S*A_u*a**(-1)
+        """ Compressible / Alfven velocity amplitude """
+        uzero=(V_A if alfven else V_S)*A_u*a**(-1)
         cs=V_S*a**((-3*gam1)/2)
         print('cs',cs,'cs**2',cs**2,'Va',valf)
         print('uzero',uzero)
@@ -186,14 +206,20 @@ class setup_cosmowave(object):
         distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
         self.wk = k
         self.x0 = (-dx,-dy,-dz)
-        self.xdot0 = np.dot(self.x0,runit)
+        self.xdot0 = -dx
         #distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
         distribute.setcubicdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
         #dbrho=A_u*omega_S*np.sqrt(a)/(4*sigma**2)*4*kappa
-        self.drho= A_u*omega_S*np.sqrt(a)/(4*sigma**2)
+        if case == 3:
+            self.drho = A_u*omega_S*np.sqrt(a)/(4*sigma**2)
+        else:
+            # standing waves (0,2) and traveling Alfven (1) have no density perturbation at a_i
+            self.drho = 0.
         print("DRHO",self.drho,"wk",self.wk,"xdot0",self.xdot0,"kappa",kappa)
         if self.drho != 0:
             print("FIXING THE DENSITY HERE")
+            xgrid = np.linspace(-dx, dx, 20001)
+            self._rho_z_grid = (xgrid, self.getrho(xgrid))
             fixdens.set_density_profile(self,-dx,dx,1)
         
 
@@ -213,26 +239,52 @@ class setup_cosmowave(object):
         print('npart = ',self.npart,' particle mass = ',self.mass[0], 'wk',self.wk,'x0',self.xdot0)
   
         for i in range(self.npart):
-            xyz=(self.x[i],self.y[i],self.z[i])
-            x1    = np.dot(xyz,runit)
-            cosx1 = np.cos(self.wk*(x1-self.xdot0))
-            #vvec = uzero*np.array([0.,cosx1,0.])
-            vvec = uzero*np.array([cosx1,0.,0.]) #comp
-            vxyz=self.transform_vec(vvec,sina,sinb,cosa,cosb)
-            self.vx.append(vxyz[0])
-            self.vy.append(vxyz[1])
-            self.vz.append(vxyz[2])
-            if trav==1:
-                #self.Bz.append(Bzero+Bzero*self.drho*(4*self.kappa*np.cos(self.wk*(self.x[i] - self.xdot0))-np.sin(self.wk*(self.x[i] - self.xdot0))))
-                #self.Bz.append(Bzero+Bzero*self.drho*(4*self.kappa*np.cos(self.wk*(self.x[i] - self.xdot0))-np.sin(self.wk*(self.x[i] - self.xdot0))))
-                self.Bz.append(Bzero+Bzero*(self.rho[i]-self.rhozero)/self.rhozero)
-                #self.Bz.append(Bzero)
-                #self.Bz.append(Bzero-Bzero*A_u*np.sqrt(a)/(4*np.pi*omega_A)*(4*self.kappa*np.cos(self.wk*(self.x[i] - self.xdot0))-np.sin(self.wk*(self.x[i] - self.xdot0)))) 
+            cosx1 = np.cos(self.wk*(self.x[i]-self.xdot0))
+            sinx1 = np.sin(self.wk*(self.x[i]-self.xdot0))
+            if alfven:
+                # Alfven: dv perpendicular to B0 (B0 along x-hat, dv along y-hat)
+                self.vx.append(0.)
+                self.vy.append(uzero*cosx1)
+                self.vz.append(0.)
+            elif case == 4:
+                # divergence-cleaning test: no velocity perturbation
+                self.vx.append(0.)
+                self.vy.append(0.)
+                self.vz.append(0.)
             else:
+                # compressible: dv parallel to k (along x-hat)
+                self.vx.append(uzero*cosx1)
+                self.vy.append(0.)
+                self.vz.append(0.)
+            if case == 0:
+                # standing Alfven: B0 along x-hat, dB(a_i)=0
+                self.Bx.append(Bzero)
+                self.By.append(0.)
+                self.Bz.append(0.)
+            elif case == 1:
+                # traveling Alfven eigenmode (paper eq. 79):
+                # dBc/Bc = A_u*sqrt(a_i)/(4*OmegaA) * [sin(kx-psi) - 4*kappa_A*cos(kx-psi)], psi=0 at a_i
+                dBy = Bzero*A_u*np.sqrt(a)/(4.*omega_A)*(sinx1 - 4.*kappa_A*cosx1)
+                self.Bx.append(Bzero)
+                self.By.append(dBy)
+                self.Bz.append(0.)
+            elif case == 2:
+                # standing compressible: B0 along z-hat, dB(a_i)=0
+                self.Bx.append(0.)
+                self.By.append(0.)
                 self.Bz.append(Bzero)
-            self.By.append(0.)
-            self.Bx.append(0.)
-            #print(pzero, cs**2,(self.rho[i]-self.rhozero),gam1,"rho",self.rho[i])
+            elif case == 4:
+                # divergence-cleaning IC: B0 along z-hat, dBx = A_u*B0*sin(k(x-x0))
+                # gives div(Bc) = A_u*B0*k*cos(k(x-x0)) at a=a_i, psi(a_i)=0
+                self.Bx.append(Bzero*A_u*sinx1)
+                self.By.append(0.)
+                self.Bz.append(Bzero)
+            else:
+                # case 3: traveling compressible gamma=4/3 (existing behavior)
+                # uses dBc/Bc = drho/rho simplifying assumption (paper eq. 37)
+                self.Bx.append(0.)
+                self.By.append(0.)
+                self.Bz.append(Bzero+Bzero*(self.rho[i]-self.rhozero)/self.rhozero)
             uui=(pzero+cs**2*(self.rho[i]-self.rhozero))/(gam1*self.rho[i])
             self.u.append(uui)
 

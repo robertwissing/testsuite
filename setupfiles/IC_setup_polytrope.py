@@ -15,6 +15,7 @@ class setup_polytrope(object):
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
+    inflow=0
     rhoit=0
     npart=0
     ngas=0
@@ -82,17 +83,15 @@ class setup_polytrope(object):
          dtheta_xi1 = dtheta_values[-1]  # Surface derivative (negative)
         
          # Physical constants
-         G = 1.0  # Gravitational constant (m³ kg⁻¹ s⁻²)
+         G = 1.0  # Gravitational constant
         
-         # Step 2: Compute α from radius condition R = α·ξ₁
+         # Step 2: Compute alpha
          self.alpha = R / xi_1
         
-         # Step 3: Compute ρ_c directly from mass condition
-         # M = -4π·α³·ρ_c·ξ₁²·(dθ/dξ)|_{ξ₁}
+         # Step 3: Compute rho_c from mass condition
          self.rho_c = M / (-4 * np.pi * self.alpha**3 * xi_1**2 * dtheta_xi1)
         
-         # Step 4: Compute K from fundamental definition
-         # α² = [(n+1)K / (4πG)] · ρ_c^{(1-n)/n}
+         # Step 4: Compute K
          self.K = (self.alpha**2 * 4 * np.pi * G) / ((n + 1) * self.rho_c**((1 - n)/n))
          print("MY K and n     self.n*self.K*(self.rho[i]**(1/self.n)   ", self.K, self.n);      
          # Step 5: Verify and compute profile
@@ -126,7 +125,8 @@ class setup_polytrope(object):
          deltax = self.dxbound/nx
          print('DISTRI: ',distri)
          if distri==0:
-             raise SystemExit("DOES NOT WORK WITH LATTICE SETUP AT THE MOMENT (add stretch mapping)")
+             print("DOES NOT WORK WITH LATTICE SETUP AT THE MOMENT (add stretch mapping)")
+             exit
              distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
          elif distri==1:
             distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)            

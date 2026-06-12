@@ -1,5 +1,5 @@
 import numpy as np
-from numba import njit
+from numba import njit,jit
 
 ngrid = 2048 #r number of points used when integrating rho to get mass
 maxits = 500  # max number of iterations
@@ -63,38 +63,38 @@ def set_density_profile(D,xmin,xmax,rhofunc=None,rhotab=None,xtab=None,start=0,i
         #get total mass integrated along coordinate direction to normalise the density profile
         #  (we assume total mass is 1 for both particles and the desired profile,
         #   i.e. that the same total mass is in both)
-        if (rhotab != None):
+        if rhotab is not None:
            nt = len(rhotab)
-
            # if no coordinate table is passed, create a table
            # of equally spaced points between xmin and xmax
-
-           if (xtab != None):
+          
+           if xtab is not None:
               if (len(xtab) < nt):
                   print('set_density_profile','coordinate table different size to density table')
                   exit
-              xtable[1:nt] = xtab[1:nt]
            else:
-              xtable[1:nt]=np.linspace(xmin,xmax,nt)
+              xtab=np.linspace(xmin,xmax,nt)
            # calculate mass in coord
            if (is_r):
-              get_mass_tab_r(masstab,rhotab,xtable)
+              masstab = get_mass_tab_r(rhotab,xtab)
            elif (is_rcyl):
-              get_mass_tab_rcyl(masstab,rhotab,xtable)
+              masstab = get_mass_tab_rcyl(rhotab,xtab)
            else:
-              get_mass_tab(masstab,rhotab,xtable)
-
-           totmass    = yinterp(masstab,xtable[1:nt],xmax)
-           rho_at_min = yinterp(rhotab,xtable[1:nt],xmin)
-
+              masstab = get_mass_tab(rhotab,xtab)
+           print(masstab)
+           print(rhotab)
+           print(xtab)
+           print(len(masstab),len(rhotab),len(xtab))
+           totmass = np.interp(xmax, xtab, masstab)
+           rho_at_min = np.interp(xmin, xtab, masstab)
         else:
-
            if (is_r):
               totmass = get_mass_r(D,xmax,xmin)
            elif (is_rcyl):
               totmass = get_mass_rcyl(D,xmax,xmin)
            else:
-              totmass = get_mass(xmax,xmin)
+              xgrid, rho_grid = D._rho_z_grid
+              totmass = get_mass(xmax,xmin,xgrid,rho_grid)
 
            rho_at_min = D.getrho(xmin)
            print("rhoatmin ",rho_at_min)
@@ -126,21 +126,30 @@ def set_density_profile(D,xmin,xmax,rhofunc=None,rhotab=None,xtab=None,start=0,i
               fracmassold = np.pi*rhozero*(xold**2 - xmin**2)
            else:
               fracmassold = rhozero*(xold - xmin)
+           # A particle may lie just outside [xmin,xmax] (e.g. close-packed
+           # lattice offsets). Clamp the target enclosed mass to [0,totmass] so a
+           # root always exists in [xmin,xmax]; otherwise the solver iterates to
+           # maxits and reports "Stretch mapping not converged".
+           if (fracmassold < 0.):
+              fracmassold = 0.
+           elif (fracmassold > totmass):
+              fracmassold = totmass
            if (xold > xmin):  # if x=0 do nothing
               its   = 0
               xprev = 0.0
               xi    = xold   # starting guess
               # calc func to determine if tol is met
               # tablefunction still fortran
-              if (rhotab != None):
-                 func  = yinterp(masstab,xtable[1:nt],xi)
+              if rhotab is not None:
+                 func =  np.interp(xi, xtab, masstab)
               else:
                  if (is_r):
                     func  = get_mass_r(D,xi,xmin)
                  elif (is_rcyl):
                     func  = get_mass_rcyl(D,xi,xmin)
                  else:
-                    func  = get_mass(xi,xmin)
+                    xgrid, rho_grid = D._rho_z_grid
+                    func  = get_mass(xi,xmin,xgrid,rho_grid)
 
               func = func - fracmassold
               xminbisect = xmin
@@ -150,14 +159,14 @@ def set_density_profile(D,xmin,xmax,rhofunc=None,rhotab=None,xtab=None,start=0,i
                  xprev = xi
                  its   = its + 1
                  # tablefunction still fortran
-                 if (rhotab != None):
-                    func  = yinterp(masstab,xtable[1:nt],xi) - fracmassold
+                 if rhotab is not None:
+                    func  = np.interp(xi, xtab, masstab) - fracmassold
                     if (is_r):
-                       dfunc = 4.*np.pi*xi**2*yinterp(rhotab,xtable[1:nt],xi)
+                       dfunc = 4.*np.pi*xi**2*np.interp(xi, xtab, rhotab)
                     elif (is_rcyl):
-                       dfunc = 2.*np.pi*xi*yinterp(rhotab,xtable[1:nt],xi)
+                       dfunc = 2.*np.pi*xi*np.interp(xi, xtab, rhotab)
                     else:
-                       dfunc = yinterp(rhotab,xtable[1:nt],xi)
+                       dfunc = np.interp(xi, xtab, rhotab)
                  else:
                     if (is_r):
                        func  = get_mass_r(D,xi,xmin) - fracmassold
@@ -166,7 +175,8 @@ def set_density_profile(D,xmin,xmax,rhofunc=None,rhotab=None,xtab=None,start=0,i
                        func  = get_mass_rcyl(D,xi,xmin) - fracmassold
                        dfunc = 2.*np.pi*xi*D.getrho(xi)
                     else:
-                       func  = get_mass(xi,xmin) - fracmassold
+                       xgrid, rho_grid = D._rho_z_grid
+                       func  = get_mass(xi,xmin,xgrid,rho_grid) - fracmassold
                        dfunc = D.getrho(xi)
                  if (bisect):
                     if (func > 0.):
@@ -190,8 +200,8 @@ def set_density_profile(D,xmin,xmax,rhofunc=None,rhotab=None,xtab=None,start=0,i
 
 
 # tablefunction still fortran
-              if (rhotab!=None):
-                 rhoi = yinterp(rhotab,xtable[1:nt],xi)
+              if rhotab is not None:
+                 rhoi = np.interp(xi, xtab, rhotab)
               else:
                  rhoi = D.getrho(xi)
 
@@ -247,7 +257,7 @@ def get_mass_r(D,r,rmin):
      dr = (r - rmin)/ngrid
      dmprev     = 0.
      get_mass_r = 0.
-     for i in range(1,ngrid):
+     for i in range(1, ngrid + 1):   # inclusive, reach xmax (Fortran do i=1,ngrid)
         ri         = rmin + i*dr
         dmi        = ri*ri*D.getrho(ri)*dr
         get_mass_r = get_mass_r + 0.5*(dmi + dmprev) # trapezoidal rule
@@ -262,7 +272,7 @@ def get_mass_rcyl(D,rcyl,rmin):
      dr = (rcyl - rmin)/ngrid
      dmprev   = 0.
      get_mass_rcyl = 0.
-     for i in range(1,ngrid):
+     for i in range(1, ngrid + 1):   # inclusive, reach xmax (Fortran do i=1,ngrid)
         ri            = rmin + i*dr
         dmi           = ri*D.getrho(ri)*dr
         get_mass_rcyl = get_mass_rcyl + 0.5*(dmi + dmprev) # trapezoidal rule
@@ -275,15 +285,15 @@ def get_mass_rcyl(D,rcyl,rmin):
 #
 # For faster iterations function rhoxi defined here by hand(maybe should create table of function instead or find better way).
 @njit
-def get_mass(x,xmin):
+def get_mass(x,xmin,xgrid,rho_grid):
      dx = (x - xmin)/ngrid
      dmprev   = 0.
      get_mass = 0.
      delta=0.0025
-     for i in range(1,ngrid):
+     for i in range(1, ngrid + 1):   # inclusive, reach xmax (Fortran do i=1,ngrid)
          xi       = xmin + i*dx
+         rhoxi = np.interp(xi, xgrid, rho_grid)
          #rampf = 1./(1. + np.exp(-2.*(xi)/delta))
-
          #fac1 = (1. - 1./(1. + np.exp(2.*(xi+0.25)/delta)))
          #fac2 = (1. - 1./(1. + np.exp(2.*(0.25-xi)/delta)))
          #rampf = fac1*fac2
@@ -292,10 +302,9 @@ def get_mass(x,xmin):
          #rhoxi = 1.0*np.exp(-xi**2/(2.0))
          #rhoxi= 1.0
          #rhoxi=D.getrho(xi)
-         rhoxi=1.0 + 0.00047535759060996836*(4*4.435843640411451*np.cos(6.283185307179586*(xi+0.5))-np.sin(6.283185307179586*(xi+0.5)))
+         #rhoxi=1.0 + 0.00047535759060996836*(4*4.435843640411451*np.cos(6.283185307179586*(xi+0.5))-np.sin(6.283185307179586*(xi+0.5)))
          #rhoxi = 1.0 + 10**(-3)*np.sin(6.283185307179586*(xi + 0.5))
          #rhoxi = np.exp(-xi**2/(2.0))
-         #dmi      = D.getrho(xi)*dx
          dmi = rhoxi*dx
          get_mass = get_mass + 0.5*(dmi + dmprev) # trapezoidal rule
          dmprev   = dmi
@@ -310,10 +319,8 @@ def get_mass(x,xmin):
 #
 # version that integrates along spherical radius
 
-def get_mass_tab_r(masstab,rhotab,rtab):
-
-
-     masstab[0] = 0.
+def get_mass_tab_r(rhotab,rtab):
+     masstab = np.zeros(len(rhotab))
      dmprev     = 0.
      rprev      = rtab[0]
      for i in range(1,len(rhotab)):
@@ -325,14 +332,12 @@ def get_mass_tab_r(masstab,rhotab,rtab):
         rprev  = ri
 
      masstab = 4.*np.pi*masstab
-
+     return masstab
 
 # version that integrates along cylindrical radius
 
-def get_mass_tab_rcyl(masstab,rhotab,rtab):
-
-
-     masstab[0] = 0.
+def get_mass_tab_rcyl(rhotab,rtab):
+     masstab = np.zeros(len(rhotab))
      dmprev     = 0.
      rprev      = rtab[0]
      for i in range(1,len(rhotab)):
@@ -344,13 +349,12 @@ def get_mass_tab_rcyl(masstab,rhotab,rtab):
         rprev  = ri
 
      masstab = 2.*np.pi*masstab
-
+     return masstab
 
 # version that integrates along a cartesian direction
 
-def get_mass_tab(masstab,rhotab,xtab):
-
-     masstab[0] = 0.
+def get_mass_tab(rhotab,xtab):
+     masstab = np.zeros(len(rhotab))
      dmprev     = 0.
      xprev      = xtab[0]
      for i in range(1,len(rhotab)):
@@ -360,6 +364,7 @@ def get_mass_tab(masstab,rhotab,xtab):
         masstab[i] = masstab[i-1] + 0.5*(dmi + dmprev) # trapezoidal rule
         dmprev = dmi
         xprev  = xi
+     return masstab
 
 def coord_transform(xin,yin,zin,itypein,itypeout):
     #input output same

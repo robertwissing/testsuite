@@ -12,6 +12,7 @@ class setup_mhdrotor(object):
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
     rhoit=0
+    inflow=0
     npart=0
     ngas=0
     ndark=0

@@ -10,7 +10,7 @@ import numpy as np
 def getsmooth(D,N):
     m=np.asarray(D.mass)
     rho=np.asarray(D.rho)
-    hfact3=N*3/(2**3*4*np.pi)
+    hfact3=N*3/(2*2*2*4*np.pi)
     D.h=(hfact3*m/rho)**(1./3.)
     return D.h
 

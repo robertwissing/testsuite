@@ -10,7 +10,7 @@ import IC_distribute as distribute
 import IC_fixdens as fixdens
 import IC_smoothlength as smth
 from numba import njit
-
+import readtipsy as tip
 
 class setup_mhdisowave(object):
     dICdensRsmooth = 0.1
@@ -28,14 +28,17 @@ class setup_mhdisowave(object):
     time=0
     grav=0
     cosmo=0
+    inflow=0
     molweight=1.0
     gamma=5./3.
     periodic=1
-    deltastep=0.002
-    nsteps=200
+    deltastep=0.001
+    freqout = 100
+    ns = 64
+    nsteps=600
     dmsolunit=1.0
     dkpcunit=1.0
-    adi=1
+    adi=0
     mass=[]
     x=[]
     y=[]
@@ -67,7 +70,7 @@ class setup_mhdisowave(object):
     
     def __init__(self):
         pass
-    def create(self,nx,beta=0.1,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000'):
+    def create(self,nx,distri=0,vm=0,entry='datafiles/alfvenwave128_preglass.00000',beta=0.1):
         przero = 1.0
         gam1 = self.gamma-1
         B0=np.sqrt(2.0*przero/beta)
@@ -80,12 +83,23 @@ class setup_mhdisowave(object):
         dy=dx*0.5
         dz=2*np.sqrt(6)*deltax
         distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
-        distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        if distri==0:
+             distribute.setcubicdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        elif distri==1:
+             distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+        else:
+             tgdata,tddata,tsdata,data_header,time=tip.readtipsy(entry);
+             self.x=tgdata[:,1]
+             self.y=tgdata[:,2]
+             self.z=tgdata[:,3]
+             self.rho=tgdata[:,7]
         self.npart=len(self.x)
         self.ngas=self.npart
         totmass = self.dxbound*self.dybound*self.dzbound*self.rhozero
         self.mass = [totmass/self.npart]*self.npart
-        self.h=smth.getsmooth(self,200)
+        self.npart=len(self.x)
+        self.ngas=self.npart
+        self.h=smth.getsmooth(self,64)
         print('npart = ',self.npart,' particle mass = ',self.mass[0],' total mass = ',totmass)
   
         for i in range(self.npart):

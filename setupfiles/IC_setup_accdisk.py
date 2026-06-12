@@ -21,6 +21,7 @@ class setup_accdisk(object):
     ndim=3
     time=0
     gamma=5./3.
+    inflow=0
     periodic=1
     deltastep=0.62831853071  #1/10 of an orbit
     freqout=2
@@ -81,22 +82,17 @@ class setup_accdisk(object):
          self.rorb = rorb;
          self.rdisk = rdisk;
 
-#        if(q < 2.0):
-#             self.dICdensinner = self.massdisk/2*np.pi*(rdisk**(2-q)-rinner**(2-q))/(2-q); #calculate normalization density from simple surface density R^(-qdisk)  
-#         elif(q==2.0):
-#             self.dICdensinner =self.massdisk/2*np.pi*(log(rdisk)-log(rinner));
-#         else:
-#             self.dICdensinner = self.massdisk/2*np.pi*(rinner**(2-q)-rdisk**(2-q))/(q-2);
-#         #--setup parameters
-         if(q < 2.0):
-            integral = (rdisk**(2 - q) - rinner**(2 - q)) / (2 - q)
-            self.dICdensinner = self.massdisk * (2 - q) / (2 * np.pi * integral)
-         elif(q == 2.0):
-            log_term = np.log(rdisk) - np.log(rinner)
+         rinnertemp=rinner
+         p=0.5
+         if(p < 2.0):
+            integral = (rdisk**(2 - p) - rinnertemp**(2 - p)) / (2 - p)
+            self.dICdensinner = self.massdisk * (2 - p) / (2 * np.pi * integral)
+         elif(p == 2.0):
+            log_term = np.log(rdisk) - np.log(rinnertemp)
             self.dICdensinner = self.massdisk / (2 * np.pi * log_term)
          else:
-            integral = (rinner**(2 - q) - rdisk**(2 - q)) / (q - 2)
-            self.dICdensinner = self.massdisk * (q - 2) / (2 * np.pi * integral)
+            integral = (rinnertemp**(2 - p) - rdisk**(2 - p)) / (p - 2)
+            self.dICdensinner = self.massdisk * (p - 2) / (2 * np.pi * integral)
          #self.masszero=1.0
          #cs0 is same as scaleheight h/r and = 1/mach vorb=r**(-q)
          #P=cs0*density*r**(-q)
@@ -153,14 +149,41 @@ class setup_accdisk(object):
              self.Bx.append(0.)
              self.By.append(0.)
              self.Bz.append(0.)
-             self.h.append(hr*0.006) ## 1/100 of secondary BH
-             
+             #self.h.append(hr*0.006) ## 1/100 of secondary BH
+             if self.onlyoneBH==0:
+                self.h.append(hr*0.6)
+             else:
+                self.h.append(0.5)
+
+    def create_star(self,tgdata):
+        # central black hole(s): single sink, or a binary with CM-corrected primary
+        massprim = 1.0
+        softprim = 0.5
+        sinkprim = -1.0
+        if self.onlyoneBH == 1:
+            tsdata = np.array([massprim,0.0,0.0,0.0,0.0,0.0,0.0,0.0,sinkprim,softprim,0.0])
+            return tsdata, 1
+        else:
+            xsec = -self.rorb
+            vysec = -self.rorb**(-self.q)
+            softsec = self.hr*0.6
+            masssec = massprim*self.massrat
+            tssec = np.array([masssec,xsec,0.0,0.0,0.0,vysec,0.0,0.0,0.0,softsec,0.0])
+            # Set the centre-of-mass velocity by adjusting the primary
+            totmass = massprim+masssec+np.sum(tgdata[:,0])
+            vcmx = (0.0+np.sum(tgdata[:,0]*tgdata[:,4]))/totmass
+            vcmy = (masssec*vysec+np.sum(tgdata[:,0]*tgdata[:,5]))/totmass
+            vcmz = (0.0+np.sum(tgdata[:,0]*tgdata[:,6]))/totmass
+            tsdata = np.array([tssec, np.array([massprim,0.0,0.0,0.0,-vcmx,-vcmy,-vcmz,0.0,sinkprim,softprim,0.0])])
+            return tsdata, 2
+
     def getrhoi(self,i):
         return self.rhozero
     
     def getveli(self,i):
         rcyl=np.sqrt(self.x[i]*self.x[i]+self.y[i]*self.y[i])
-        vazi=rcyl**(-self.q)
+        vazi=rcyl**(-0.5) * np.sqrt(1.0 - 3.0*self.hr*self.hr*0.5)  #sqrt(GM/R)
+
         vx,vy,vz = self.transform_coordinate(0.0,vazi,0.0,self.x[i],self.y[i],self.z[i],"cyl","cart")
         return vx,vy,vz
     

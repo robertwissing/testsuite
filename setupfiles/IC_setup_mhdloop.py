@@ -14,6 +14,7 @@ class setup_mhdloop(object):
     rhoit=0
     npart=0
     ngas=0
+    inflow=0
     ndark=0
     nstar=0
     ndim=3
@@ -26,7 +27,7 @@ class setup_mhdloop(object):
     ns=64
     periodic=1
     deltastep=0.1
-    nsteps=400
+    nsteps=200
     dmsolunit=1.0
     dkpcunit=1.0
     adi=1

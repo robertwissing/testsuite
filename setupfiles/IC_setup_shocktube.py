@@ -12,6 +12,7 @@ class setup_shocktube(object):
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
+    inflow=0
     rhoit=0
     npart=0
     ngas=0
@@ -142,7 +143,6 @@ class setup_shocktube(object):
          rhozero = (self.leftstate[0]*np.prod(xmaxleft-xminleft) + self.rightstate[0]*np.prod(xmaxright - xminright)) + np.prod(xmaxright - xminleft)
          
          gam1 = self.gamma - 1.
-         print("RHOO ",self.rho)
          if (np.abs(gam1) > 1.e-3):
             uuleft  = self.leftstate[1]/(gam1*self.leftstate[0])
             uuright = self.rightstate[1]/(gam1*self.rightstate[0])
@@ -163,6 +163,8 @@ class setup_shocktube(object):
                    self.vx.append(self.rightstate[2]*self.rightstate[0]/self.rho[i])
                    self.vy.append(self.rightstate[3]*self.rightstate[0]/self.rho[i])
                    self.vz.append(self.rightstate[4]*self.rightstate[0]/self.rho[i])
+                #if distri==2:
+                #    uuright=self.rightstate[1]/(gam1*self.rho[i])
                 self.u.append(uuright)
                 self.Bx.append(self.rightstate[5])
                 self.By.append(self.rightstate[6])
@@ -176,11 +178,13 @@ class setup_shocktube(object):
                    self.vx.append(self.leftstate[2]*self.rho[i]/self.leftstate[0])
                    self.vy.append(self.leftstate[3]*self.rho[i]/self.leftstate[0])
                    self.vz.append(self.leftstate[4]*self.rho[i]/self.leftstate[0])
+                #if distri==2:
+                #    uuleft=self.leftstate[1]/(gam1*self.rho[i])
                 self.u.append(uuleft)
                 self.Bx.append(self.leftstate[5])
                 self.By.append(self.leftstate[6])
                 self.Bz.append(self.leftstate[7])
-        
+
         
     def adjust_shock_boundaries(self,xleft,xright,dxleft):
             vxleft=self.leftstate[2]
@@ -285,8 +289,8 @@ class setup_shocktube(object):
                 self.nsteps=1000
                 self.gamma      =  1.0
                 self.polyk      =  0.01
-                self.leftstate  = [1.,0.006, 4.45,0.,0.,1./sqrt(2.),1./sqrt(2.),0.]
-                self.rightstate = [1.,0.006,-4.45,0.,0.,1./sqrt(2.),1./sqrt(2.),0.]
+                self.leftstate  = [1.,0.006, 4.45,0.,0.,1./np.sqrt(2.),1./np.sqrt(2.),0.]
+                self.rightstate = [1.,0.006,-4.45,0.,0.,1./np.sqrt(2.),1./np.sqrt(2.),0.]
                 xleft      = -4.00
             elif(choice==8):
                 #--Steady shock (Falle 2003)
@@ -301,7 +305,7 @@ class setup_shocktube(object):
                 #Toth 2000 shocktube
             elif(choice==9): 
                 self.gamma      = 5./3.
-                self.tmax = 0.08
+                self.tmax = 0.04
                 self.deltastep=0.00008
                 self.nsteps=1000
                 self.leftstate  = [1.,20.,10.,0.,0.,5./const,5/const, 0.]
@@ -315,7 +319,48 @@ class setup_shocktube(object):
                 self.gamma = 1.4
                 self.leftstate  = [1.,1000.,0.,0.,0.,0.,0., 0.]
                 self.rightstate = [1.,0.1,0.,0.,0.,0.,0., 0.]
-                
+            elif(choice==12):
+                #--fast/slow shock (Ryu & Jones 1995); SPLASH exact_mhdshock #2
+                #  B in RAW units (Bx=By=1), matching the SPLASH reference table
+                shocktype = "fast slow shock"
+                self.gamma      = 5./3.
+                self.tmax = 0.15
+                self.deltastep=0.0015
+                self.nsteps=100
+                self.leftstate  = [1.0,1.0,0.,0.,0.,1.0,1.0,0.]
+                self.rightstate = [0.2,0.1,0.,0.,0.,1.0,0.0,0.]
+            elif(choice==13):
+                #--isothermal MHD shock (Balsara 1998); SPLASH exact_mhdshock #4
+                #  isothermal with cs^2 = 1 (polyk=1 -> P=rho)
+                shocktype = "isothermal B98"
+                self.gamma      = 1.0
+                self.polyk      = 1.0
+                self.tmax = 0.2
+                self.deltastep=0.002
+                self.nsteps=100
+                self.leftstate  = [1.08,1.08,1.2,0.01,0.5,2./const,3.6/const,2./const]
+                self.rightstate = [1.0 ,1.0 ,0. ,0.  ,0. ,2./const,4.0/const,2./const]
+            elif(choice==14):
+                #--Mach 25 shock (Dai & Woodward 1994); SPLASH exact_mhdshock #6
+                shocktype = "Mach 25 DW94"
+                self.gamma      = 5./3.
+                self.tmax = 0.03
+                self.deltastep=0.0001
+                self.nsteps=300
+                self.freqout=30
+                self.leftstate  = [1.0,1.0, 36.87,-0.1546,-0.03864,4./const,4./const,1./const]
+                self.rightstate = [0.1,1.0,-36.87, 0.    , 0.     ,4./const,4./const,1./const]
+            elif(choice==15):
+                #--two-rarefaction (Ryu & Jones 1995); SPLASH exact_mhdshock #5
+                #  perpendicular field (Bx=0, By=1 raw), symmetric diverging flow
+                shocktype = "rarefaction"
+                self.gamma      = 5./3.
+                self.tmax = 0.1
+                self.deltastep=0.001
+                self.nsteps=100
+                self.leftstate  = [1.0,1.0,-1.0,0.,0.,0.,1.0,0.]
+                self.rightstate = [1.0,1.0, 1.0,0.,0.,0.,1.0,0.]
+
             if (abs(xright)  < np.finfo(float).eps):
                   xright  = -xleft
             return xleft,xright

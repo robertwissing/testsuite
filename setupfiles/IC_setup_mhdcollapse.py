@@ -15,6 +15,7 @@ class setup_mhdcollapse(object):
     dICdensouter = 1.0
     npart=0
     rhoit=0
+    inflow=0
     ns=64
     ngas=0
     ndark=0
@@ -26,8 +27,8 @@ class setup_mhdcollapse(object):
     deltastep=0.0001
     freqout=10
     nsteps=1100
-    dmsolunit=10**3
-    dkpcunit=10**(-3)
+    dmsolunit=1000.0
+    dkpcunit=0.001
     adi=0
     grav=1
     shape = 0
@@ -81,11 +82,13 @@ class setup_mhdcollapse(object):
          
          kpctounit=self.dkpcunit
          msoltounit=self.dmsolunit
-         self.Rin=self.dICdensR*10**(-3)*kpctounit # pc
-         Mtot=1.0 # solar mass
+         self.Rin=self.dICdensR*10**(-3)/kpctounit # pc
+         Mtotmsol=1.0 # solar mass
+         #self.dmsolunit = 1.0/rhodiff*(4/3*np.pi*self.Rin**3)
+         #msoltounit=self.dmsolunit
+         Mtot = Mtotmsol/self.dmsolunit 
          self.rhoin= Mtot/(4/3*np.pi*self.Rin**3) #msol/pc3
          self.rhoout=self.rhoin/rhodiff
-
          self.dICdensinner=self.rhoin
          self.dICdensouter=self.rhoout
 
@@ -95,9 +98,9 @@ class setup_mhdcollapse(object):
          Bzero=610/mu*10**(-6) #gauss
          
          # boundaries
-         dz=0.075*10**(-3)*kpctounit #pc
-         dy=0.075*10**(-3)*kpctounit
-         dx=0.075*10**(-3)*kpctounit
+         dz=0.075*10**(-3)/kpctounit #pc
+         dy=0.075*10**(-3)/kpctounit
+         dx=0.075*10**(-3)/kpctounit
          
          distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
          deltax = self.dxbound/nx
@@ -143,7 +146,7 @@ class setup_mhdcollapse(object):
          hsm2=1.0/rhosm**(1./3.)
          rhoc=10**-12
          msoltog=1.989e+33
-         hsm=(((np.mean(self.mass)/msoltounit)*msoltog/rhoc)**(1./3.))*3.24078e-22*kpctounit
+         hsm=(((np.mean(self.mass)*msoltounit)*msoltog/rhoc)**(1./3.))*3.24078e-22/kpctounit
          print(hsm*kpctoau/kpctounit,hsm2*kpctoau/kpctounit)
          print(hsm,hsm2)
          
@@ -197,5 +200,3 @@ class setup_mhdcollapse(object):
         rhocrit=10**(-14)*gtosol/(cmtokpc**3)
         print(rhocrit,rho)
         return (0.2*kmtokpc)**2*rho*np.sqrt(1+(rho/rhocrit)**(4/3))
-
- 

@@ -10,12 +10,6 @@ import xdrlib
 import numpy as np
 
 
-# def generate_density_table(D, n=1000, dim=1):
-#     xtab = np.linspace(0, D.R, n)
-#     rhotab = np.array([D.getrho(r) for r in xtab])
-#     return xtab, rhotab
-
-
 def generate_density_table(D, dim=1, n=1000):
     if dim == 1:
         xtab = np.linspace(0, D.Rtab, n)
@@ -200,6 +194,6 @@ def compute_total_mass(D, N):
         
         total_mass = np.sum(rho_vals) * dV
         return total_mass
-    
+
 #dim, n, R, grid, densities = read_density_table_xdr("densitytable_xdr")
 #=grid[0]

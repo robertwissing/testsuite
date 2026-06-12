@@ -12,6 +12,7 @@ class setup_evrard(object):
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
+    inflow=0
     rhoit=0
     npart=0
     ngas=0
@@ -57,7 +58,7 @@ class setup_evrard(object):
     rhozero= 1.0
     M=1.0
     R=1.0
-    eps = 0.01
+    eps = 0.02
     Rtab = 1.0
     def __init__(self):
         pass
@@ -114,13 +115,6 @@ class setup_evrard(object):
          #self.h=smth.getsmooth(self,64)
          self.h = [self.eps]*self.npart
          
-         # Generate 1D radial density table
-         ntab=10000
-         dimtab=1
-         gridtab, rhotab = denstable.generate_density_table(self,n=ntab,dim=dimtab)
-         denstable.write_density_table_xdr(self,"densitytable_xdr",gridtab,rhotab,n=ntab,dim=dimtab)
-         
-         
          for i in range(self.npart):
              self.vx.append(0.)
              self.vy.append(0.)
@@ -136,6 +130,7 @@ class setup_evrard(object):
 
     def getrho(self,r):
         return (self.M/(2*np.pi*self.R**2*(r+self.eps)))
+    
     def getrho_vec(self,r_vals):
         return np.where(
             r_vals <= self.R,

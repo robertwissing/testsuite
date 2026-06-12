@@ -4,6 +4,18 @@ import IC_distribute as distribute
 import IC_fixdens as fixdens
 import IC_smoothlength as smth
 import readtipsy as tip
+
+def kernel(r,h):
+    q = r / h
+    if q < 1.0:
+        W = 1 - 1.5*q*q + 0.75*q**3
+    elif q < 2.0:
+        W = 0.25*(2 - q)**3
+    else:
+        W = 0.0
+    return W;
+                                                    
+
 class setup_sedov(object):
     dICdensRsmooth = 0.1
     dICdensprofile = 1
@@ -11,6 +23,7 @@ class setup_sedov(object):
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
+    inflow=0
     rhoit=0
     npart=0
     ngas=0
@@ -64,10 +77,13 @@ class setup_sedov(object):
          self.rhozero=1.0
          self.deltastep=(10.0/ublast)**(1/2)*0.0002
          onlyoneE = 1
+         Bin=Bout=0.0
          #--setup parameters
-         if select==1:
+         if select==2:
+             onlyoneE = 0
+             print("You picked select 2")
+         elif select==1:
              print("You picked select 1")
-             Bin=Bout=0.0
          else:
              print("You picked select 0")
              if betain==0:
@@ -75,6 +91,7 @@ class setup_sedov(object):
              else:
                  Bin=np.sqrt(2*Pin/betain)
                  Bout=Bin
+                 onlyoneE = 0
          
          #boundaries    
          dz=0.5
@@ -104,9 +121,9 @@ class setup_sedov(object):
          print('npart = ',self.npart,' particle mass = ',self.mass[1])
          self.h=smth.getsmooth(self,64)
 
-         if select == 1:
+         if select == 1 or select == 2:
              ublast=ublast/self.mass[0]
-             Rin=np.mean(self.h)
+             Rin=2.0*np.mean(self.h)
          print('Rin',Rin)
          print(self.h/deltax)
          n=0
@@ -115,6 +132,9 @@ class setup_sedov(object):
          sum2=0
          Uin=0.0
          Uout=0.0
+         weights=np.zeros(self.npart)
+         mincoords = [self.x[0],self.y[0],self.z[0]] #centre on particle 0
+         self.centermybox(mincoords)
          for i in range(self.npart):
              radius2 = self.x[i]**2 + self.y[i]**2+self.z[i]**2
              if (radius2 <= Rin**2):
@@ -124,14 +144,17 @@ class setup_sedov(object):
                      Rin=np.sqrt(radius2)
                      idxmin = i;
                      mincoords = [self.x[i],self.y[i],self.z[i]]
+                     self.centermybox(mincoords)
                  else:
+                     weights[i]=kernel(np.sqrt(radius2),self.h[i])
                      n=n+1
              else:
                  n2=n2+1
 
-         if select == 1:
+         if select == 1 or select == 2:
+             norm = sum(weights)
              Uin=ublast/n
-             Uout=2*10**-5/n2
+             Uout=10**-5/n2
              Pin=Uin*(gam1*self.rhozero)
              Pout=Uout*(gam1*self.rhozero)
              if betain==0:
@@ -152,20 +175,41 @@ class setup_sedov(object):
              self.vy.append(0.)
              self.vz.append(0.)
              #if (radius2 <= Rin**2):
-             if (i == idxmin):
-                 sum1=sum1+Uin
-                 self.u.append(Pin/(gam1*self.rhozero))
-                 Bzero=Bin
+             if (onlyoneE == 1):
+                if (i == idxmin):
+                     sum1=sum1+Uin
+                     self.u.append(Pin/(gam1*self.rhozero))
+                     Bzero=Bin
+                else:
+                     sum2=sum2+Uout
+                     self.u.append(Pout/(gam1*self.rhozero))
+                     Bzero=Bout
              else:
-                 sum2=sum2+Uout
-                 self.u.append(Pout/(gam1*self.rhozero))
-                 Bzero=Bout
+                 if select==2:
+                   if (radius2 <= Rin**2):
+                        dU = (ublast-Uout*n) * weights[i] / norm + Uout
+                        sum1=sum1+dU
+                        self.u.append(dU)
+                        Bzero=Bin
+                   else:
+                        sum2=sum2+Uout
+                        self.u.append(Pout/(gam1*self.rhozero))
+                        Bzero=Bout
+                 else:
+                     if (radius2 <= Rin**2):
+                         sum1=sum1+Uin
+                         self.u.append(Pin/(gam1*self.rhozero))
+                         Bzero=Bin
+                     else:
+                         sum2=sum2+Uout
+                         self.u.append(Pout/(gam1*self.rhozero))
+                         Bzero=Bout
              self.Bx.append(Bzero*np.sqrt(0.5))
              self.By.append(0.)
              self.Bz.append(Bzero*np.sqrt(0.5))
          print("ETH: ", np.sum(self.u),"inside ",sum1,"outside ",sum2," ",n,n2)
-         if onlyoneE == 1:
-            self.centermybox(mincoords)
+         #if onlyoneE == 1:
+         #   self.centermybox(mincoords)
     def getrhoi(self,i):
         return self.rhozero
 

@@ -1,5 +1,6 @@
-from IPython import get_ipython
-def __reset__(): get_ipython().magic('reset -sf')
+#from IPython import get_ipython
+#def __reset__(): get_ipython().magic('reset -sf')
+
 from IC_setup_orzag import setup_orzag
 from IC_setup_areablob import setup_areablob
 from IC_setup_polytrope import setup_polytrope
@@ -22,17 +23,25 @@ from IC_setup_cosmowave import setup_cosmowave
 from IC_setup_taylorgreen import setup_taylorgreen
 from IC_setup_mhdslabcond import setup_mhdslabcond
 from IC_setup_mri import setup_mri
+from IC_setup_mti import setup_mti
+from IC_setup_planet import setup_planet
+from IC_setup_planetcollision import setup_planetcollision
 from IC_setup_wave import setup_wave
 from IC_setup_kh import setup_kh
+from IC_setup_square import setup_square
 from IC_setup_khslab import setup_khslab
 from IC_setup_rt import setup_rt
 from IC_setup_zeldovich import setup_zeldovich
-from IC_setup_mhdblob import setup_mhdblob
+from IC_setup_blob import setup_blob
 from IC_setup_mhdcollapse import setup_mhdcollapse
 from IC_setup_rotatingcube import setup_rotatingcube
 from IC_setup_gresho import setup_gresho
 from IC_setup_mhdisowave import setup_mhdisowave
 from IC_setup_mhdbalsaravortex import setup_mhdbalsaravortex
+from IC_setup_currentsheet import setup_currentsheet
+from IC_setup_noh import setup_noh
+from IC_setup_isentropicvortex import setup_isentropicvortex
+from IC_setup_coldkeplerian import setup_coldkeplerian
 from IC_writeascii import writeascii,convertfromcodeunits,calculatecosmoMsol
 from matplotlib import pyplot as plot
 from IC_createparamfile import createparamfile
@@ -96,6 +105,8 @@ setup_functions = {
     'orzag': setup_orzag,
     'evrard': setup_evrard,
     'polytrope': setup_polytrope,
+    'planet': setup_planet,
+    'planetcollision': setup_planetcollision,
     'areablob': setup_areablob,
     'mhdrotor': setup_mhdrotor,
     'mhddivtest': setup_mhddivtest,
@@ -113,20 +124,27 @@ setup_functions = {
     'taylorgreen': setup_taylorgreen,
     'mhdslabcond': setup_mhdslabcond,
     'mri': setup_mri,
-    'wave': setup_wave,
+    'mti': setup_mti,
     'kh': setup_kh,
+    'square': setup_square,
     'khslab': setup_khslab,
     'rt': setup_rt,
     'zeldovich': setup_zeldovich,
-    'mhdblob': setup_mhdblob,
     'mhdcollapse': setup_mhdcollapse,
     'rotatingcube': setup_rotatingcube,
     'gresho': setup_gresho,
     'mhdisowave': setup_mhdisowave,
+    'wave': setup_wave,
     'mhdbalsaravortex': setup_mhdbalsaravortex,
+    'currentsheet': setup_currentsheet,
+    'noh': setup_noh,
+    'isentropicvortex': setup_isentropicvortex,
+    'coldkeplerian': setup_coldkeplerian,
     'accdisk': setup_accdisk,
+    'blob': setup_blob,
 }
 
+print("HELLO",sys.argv)
 
 # If sys.argv[0] is not given, list all available options
 if len(sys.argv) < 2:
@@ -138,16 +156,12 @@ if len(sys.argv) < 2:
 # Determine the setup function based on setup_case
 setup_case = sys.argv[1]
 
-# Determine the setup function based on setup_case
-if any(name in setup_case for name in setup_functions):
-    # Find the key that matches the substring in setup_case
-    matching_key = next(name for name in setup_functions if name in setup_case)
-    # Call the corresponding setup function
-    sim = setup_functions[matching_key]()
+if setup_case in setup_functions:
+    # Exact match wins
+    sim = setup_functions[setup_case]()
 else:
     # Default case if no match is found
     raise ValueError(f"Unknown setup_case: {setup_case}")
-
 
 n=float(sys.argv[2])
 vm=float(sys.argv[3])
@@ -166,6 +180,8 @@ if distribution_name is None:
 default_output = f"{setup_case}_{n}_{distribution_name}"
 fileoutput = sys.argv[5] if len(sys.argv) > 5 else input(f"Enter fileoutput (default: {default_output}): ") or default_output
 
+
+print("sim",sim,setup_case)
 # Retrieve the signature of the create function
 sig = inspect.signature(sim.create)
 ## Standard arguments for all IC
@@ -188,7 +204,6 @@ for arg_name in extra_args.keys():
     argv_index += 1  # Move to the next argument in sys.argv
 all_args = {**standard_args, **extra_args}
 print("Your setup parameter list: ", setup_case, "  ", all_args)
-    
 ## Generate gas IC
 sim.create(**all_args)
 ## Generate dark matter IC
@@ -196,21 +211,26 @@ sim.create(**all_args)
 ## Generate star IC
 #orz.create_star(**all_args)
 
+
+
 ## File name
 file_string=fileoutput
 
 
-zero=[0]*len(sim.x);
-sim.metals=zero
+zero=[0.0]*len(sim.x);
+if setup_case != 'mti' and setup_case != 'blob':
+    sim.metals=zero
 sim.pot=zero
 sim.Bpsi=zero
 ## (data,kpc,msol,ifnottemp,phystocodevel,phystocodeB)
 if setup_case == 'mhdcollapse':
     sim=convertfromcodeunits(sim,0.001,1000,1,1,1)
-if setup_case == 'areablob':
+elif setup_case == 'areablob':
+    sim=convertfromcodeunits(sim,1,1,0,0,0)
+elif setup_case == 'planet' or setup_case == 'planetcollision':
     sim=convertfromcodeunits(sim,1,1,0,0,0)
 else:
-    sim=convertfromcodeunits(sim,1,1,1,0,0)
+    sim=convertfromcodeunits(sim,sim.dkpcunit,sim.dmsolunit,1,0,0)
 
 #COSMO
 if(sim.cosmo==1):
@@ -241,43 +261,35 @@ tddata=[]
 tsdata=[]
 if distri == 1:
     glasssetup = 1
-    
 
+# Generate dark-matter / star (e.g. central sink/BH) particles if the setup
+# defines them. Each hook returns (data_array, nparticles); the per-test logic
+# lives in the IC_setup_*.py files (keeps this driver generic).
+if glasssetup == 0 and hasattr(sim, 'create_dark'):
+    tddata, ndark = sim.create_dark(tgdata)
+    data_header[3]=data_header[3]+ndark
+    data_header[0]=data_header[0]+ndark
 
-if setup_case == 'accdisk' and glasssetup == 0:
-    if sim.onlyoneBH == 1:
-        massprim = 1.0
-        softprim = 0.5
-        sinkprim = -1.0
-        # Set cm velocity to primary
-        tsdata=np.array([massprim,0.0,0.0,0.0,0.0,0.0,0.0,0.0,sinkprim,softprim,0.0])
-        data_header[4]=data_header[4]+1;
-        data_header[0]=data_header[0]+1;
-    else:
-        massprim = 1.0
-        softprim = 0.5
-        sinkprim = -1.0
-        xsec = -sim.rorb
-        vysec = -sim.rorb**(-sim.q)
-        softsec = sim.hr*0.6
-        masssec = massprim*sim.massrat
-        tsdata = np.array([masssec,xsec,0.0,0.0,0.0,vysec,0.0,0.0,0.0,softsec,0.0])
-        # Set cm velocity to primary
-        totmass=massprim+masssec+np.sum(tgdata[:,0])
-        vcmx = (0.0+np.sum(tgdata[:,0]*tgdata[:,4]))/totmass
-        vcmy = (masssec*vysec+np.sum(tgdata[:,0]*tgdata[:,5]))/totmass
-        print(np.sum(tgdata[:,0]*tgdata[:,5]))
-        print(masssec*vysec)
-        print(totmass)
-        vcmz = (0.0+np.sum(tgdata[:,0]*tgdata[:,6]))/totmass
-        print(vcmx,vcmy,vcmz)
-        tsdata=np.array([tsdata,np.array([massprim,0.0,0.0,0.0,-vcmx,-vcmy,-vcmz,0.0,sinkprim,softprim,0.0])])
-        data_header[4]=data_header[4]+2;
-        data_header[0]=data_header[0]+2;
-    
-tip.writetipsy(tgdata,tddata,tsdata,"datafiles/" + file_string + ".00000",data_header,time)
-tip.writealltipsyaux(B,"datafiles/" + file_string + ".00000")
-createparamfile(file_string,sim.dxbound,sim.dybound,sim.dzbound,sim.periodic,sim.deltastep,sim.nsteps,sim.dmsolunit,sim.dkpcunit,sim.freqout,sim.adi,sim.molweight,sim.gamma,sim.grav,sim.cosmo,sim.rhoit,sim.ns,glasssetup,sim.dICdensRsmooth,sim.dICdensprofile,sim.dICdensdir,sim.dICdensR,sim.dICdensinner,sim.dICdensouter)
+if glasssetup == 0 and hasattr(sim, 'create_star'):
+    tsdata, nstar = sim.create_star(tgdata)
+    data_header[4]=data_header[4]+nstar
+    data_header[0]=data_header[0]+nstar
+
+myoutput = "datafiles/" + file_string + ".00000"
+tip.writetipsy(tgdata,tddata,tsdata,myoutput,data_header,time)
+tip.writealltipsyaux(B,myoutput)
+
+if setup_case == 'planetcollision':
+    tip.writealltipsyauxB(sim.Xg, myoutput, sim.labels)
+
+if setup_case == 'planet':
+    tip.writetipsyaux(sim.Mat1,"Material1",myoutput)
+    tip.writetipsyaux(sim.Mat2,"Material2",myoutput)
+    tip.writetipsyaux(sim.Mat3,"Material3",myoutput)
+    tip.writetipsyaux(sim.Mat4,"Material4",myoutput)
+    tip.writetipsyaux(sim.Mat5,"Material5",myoutput)
+
+createparamfile(file_string,sim,glasssetup,setup_case)
 print('time', time)
 print("created file: ",file_string)
 

@@ -14,13 +14,14 @@ from numba import njit
 import readtipsy as tip
 
 class setup_kh(object):
-    dICdensRsmooth = 0.025
+    dICdensRsmooth = 0.01
     dICdensprofile = 3
     dICdensdir = 2
     dICdensR = 0.25
     dICdensinner = 2.0 # calculated depending on mass
     dICdensouter = 1.0
     rhoit=0
+    inflow=0
     ns=64
     npart=0
     ngas=0
@@ -79,6 +80,9 @@ class setup_kh(object):
         self.rhodens=self.rhozero*rhodiff
         self.dICdensinner=self.rhodens
         self.smooth=smooth
+        nsteps_new = 200 * (np.sqrt(2) * (1 + self.rhodens)) / (3 * np.sqrt(self.rhodens))
+        nsteps_new = int(round(nsteps_new / 10) * 10)
+        self.nsteps = nsteps_new
         if smooth==0:
             self.dICdensprofile=2
         v1 = -0.5
@@ -93,18 +97,21 @@ class setup_kh(object):
         self.dxbound=1.
         deltax = self.dxbound/nx
         deltadens = deltax*(self.rhozero/self.rhodens)**(1./3.)
-        dx=self.dxbound/2.
-        dy=dx
+        dx=self.dxbound/2.;
+        if(nx<32 or rhodiff >= 8.):
+            dy=2*dx
+        else:
+            dy=dx
         dz=2*np.sqrt(6)*deltax
         distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
         if distri==0:
-            distribute.setcloseddist(self,-dx,dx,-dy,-dy*0.5,-dz,dz,deltax)
-            distribute.setcloseddist(self,-dx,dx,dy*0.5,dy,-dz,dz,deltax)
-            distribute.setcloseddist(self,-dx,dx,-dy*0.5,dy*0.5,-dz,dz,deltadens)
+            distribute.setcloseddist(self,-dx,dx,-dy,-0.25,-dz,dz,deltax)
+            distribute.setcloseddist(self,-dx,dx,0.25,dy,-dz,dz,deltax)
+            distribute.setcloseddist(self,-dx,dx,-0.25,0.25,-dz,dz,deltadens)
         elif distri==1:
-            distribute.setrandomdist(self,-dx,dx,-dy,-dy*0.5,-dz,dz,deltax)
-            distribute.setrandomdist(self,-dx,dx,dy*0.5,dy,-dz,dz,deltax)
-            distribute.setrandomdist(self,-dx,dx,-dy*0.5,dy*0.5,-dz,dz,deltadens)
+            distribute.setrandomdist(self,-dx,dx,-dy,-0.25,-dz,dz,deltax)
+            distribute.setrandomdist(self,-dx,dx,0.25,dy,-dz,dz,deltax)
+            distribute.setrandomdist(self,-dx,dx,-0.25,0.25,-dz,dz,deltadens)
         else:
             tgdata,tddata,tsdata,data_header,time=tip.readtipsy(entry);
             self.x=tgdata[:,1]
@@ -117,7 +124,7 @@ class setup_kh(object):
     
         self.npart=len(self.x)
         self.ngas=self.npart
-        totmass = self.dxbound*self.dybound*self.dzbound*self.rhomean
+        totmass = self.dxbound*0.5*self.dzbound*self.rhodens + self.dxbound*(self.dybound-0.5)*self.dzbound*self.rhozero
         self.mass = [totmass/self.npart]*self.npart
         if vm==1:
             print("Varying masses -> ONLY FOR RAND + RELAXING TO GLASS");

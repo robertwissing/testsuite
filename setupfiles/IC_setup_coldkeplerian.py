@@ -1,0 +1,181 @@
+## Setup for the COLD KEPLERIAN DISK / RING
+## Cullen & Dehnen (2010) MNRAS 408, 669; Hopkins (2015) MNRAS 450, 53.
+## A cold (near-pressureless), narrow ring of gas in exact Keplerian rotation
+## about a central point mass (a single sink particle, mass=1, added in
+## IC_createsetup.py). The exact solution is steady rotation: the ring should not
+## change. A poorly-behaved artificial viscosity instead produces a spurious
+## shear viscosity in the differential rotation, transporting angular momentum
+## and making the ring spread / break up. Hence this isolates the AV switch and
+## angular-momentum conservation -- unlike accdisk it is cold, narrow, has an
+## exact answer, and uses pure (uncorrected) Keplerian velocities.
+import numpy as np
+import IC_distribute as distribute
+import IC_fixdens as fixdens
+import IC_smoothlength as smth
+import readtipsy as tip
+
+class setup_coldkeplerian(object):
+    dICdensRsmooth = 0.05
+    dICdensprofile = 7
+    dICdensdir = 5
+    dICdensR = 2.0
+    dICdensinner = 360.0 # calculated depending on mass
+    dICdensouter = 1E-12
+    rhoit=0
+    ns=58
+    npart=0
+    ngas=0
+    ndark=0
+    nstar=0
+    ndim=3
+    time=0
+    gamma=5./3.
+    inflow=0
+    periodic=1
+    deltastep=0.62831853071  #1/10 of an orbit at r=1
+    freqout=20
+    nsteps=1000 #~100 inner orbits
+    dmsolunit=1.0
+    dkpcunit=4.84814E-9
+    adi=0          # isothermal -> cold ring (no thermal feedback from spurious AV heating)
+    grav=1
+    cosmo=0
+    molweight=1.0
+    mass=[]
+    x=[]
+    y=[]
+    z=[]
+    vx=[]
+    vy=[]
+    vz=[]
+    rho=[]
+    u=[]
+    h=[]
+    P=[]
+    Bx=[]
+    By=[]
+    Bz=[]
+    Bpsi=[]
+    soft=[]
+    tform=[]
+    metals=[]
+    dxbound=[]
+    dybound=[]
+    dzbound=[]
+    totvol=[]
+    rcylmin2= 0
+    rmin2= 0
+    rcylmax2= 10**22
+    rmax2= 10**22
+    shape=2
+    rhozero = 1.0
+    massdisk= 1E-6     # negligible gas mass -> pure external (sink) Kepler potential
+    rdisk = 2.0
+    q = 0.5
+    hr = 0.05          # aspect ratio = 1/Mach -> small = cold
+    onlyoneBH = 1      # single central sink (added in IC_createsetup.py)
+
+    def __init__(self):
+        pass
+    def create(self,nx,distri=0,vm=0,entry=' ',hr=0.05,rinner=1.0,rdisk=2.0,q=0.5):
+
+         gam1=self.gamma-1
+         self.onlyoneBH=1
+         self.dICdensRsmooth = hr
+         self.dICdensR = rdisk;
+         self.hr = hr;
+         self.q = q;
+         self.rdisk = rdisk;
+
+         rinnertemp=rinner
+         p=0.5
+         if(p < 2.0):
+            integral = (rdisk**(2 - p) - rinnertemp**(2 - p)) / (2 - p)
+            self.dICdensinner = self.massdisk * (2 - p) / (2 * np.pi * integral)
+         elif(p == 2.0):
+            log_term = np.log(rdisk) - np.log(rinnertemp)
+            self.dICdensinner = self.massdisk / (2 * np.pi * log_term)
+         else:
+            integral = (rinnertemp**(2 - p) - rdisk**(2 - p)) / (p - 2)
+            self.dICdensinner = self.massdisk * (p - 2) / (2 * np.pi * integral)
+
+         #just cube, icgenerator will do the disk/ring density profile
+         dz=1.0
+         dy=self.rdisk
+         dx=self.rdisk
+         distribute.setbound(self,-dx,dx,-dy,dy,-dz,dz)
+         deltax = self.dxbound/nx
+         if distri==0:
+            distribute.setcloseddist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+         elif distri==1:
+            distribute.setrandomdist(self,-dx,dx,-dy,dy,-dz,dz,deltax)
+         else:
+            tgdatain,tddata,tsdata,data_header,time=tip.readtipsy(entry);
+            rcyl=np.sqrt(tgdatain[:,1]**2 + tgdatain[:,2]**2)
+            hin = tgdatain[:,9];
+            fMass = tgdatain[:,0];
+            Hdisk=self.dICdensRsmooth * rcyl;
+            rhocentral = self.dICdensinner*rcyl**(-self.q) /(Hdisk*np.sqrt(2*np.pi));
+            hcentral = (fMass / rhocentral)**(1.0/3.0)
+            ttres = Hdisk / hcentral
+            hedge = (fMass / rhocentral*np.exp(ttres**2/2.0))**(1.0/3.0)
+            z_abs = np.abs(tgdatain[:,3])
+            mapp = (tgdatain[:,7] > self.dICdensouter) & \
+                           (tgdatain[:,1]**2 + tgdatain[:,2]**2 > rinner**2) & \
+                           (z_abs < ttres*Hdisk+hedge)
+            tgdata=tgdatain[mapp,:]
+            self.x=tgdata[:,1]
+            self.y=tgdata[:,2]
+            self.z=tgdata[:,3]
+            self.rho=tgdata[:,7]
+            self.periodic=0
+         self.npart=len(self.x)
+         self.ngas=self.npart
+         totmass = self.massdisk
+         print('npart = ',self.npart,' total ring mass = ',totmass)
+         self.mass = [totmass/self.npart]*self.npart
+         print(' particle mass = ',self.mass[1])
+         self.dxbound = self.rdisk*4
+         self.dybound = self.rdisk*4
+         self.dzbound = self.rdisk*2
+
+         for i in range(self.npart):
+             rad = np.sqrt(self.x[i]**2 + self.y[i]**2+self.z[i]**2)
+             vxi,vyi,vzi = self.getveli(i)
+             self.vx.append(vxi)
+             self.vy.append(vyi)
+             self.vz.append(vzi)
+             self.u.append(self.hr*rad**(-self.q)/(gam1))
+             self.Bx.append(0.)
+             self.By.append(0.)
+             self.Bz.append(0.)
+             self.h.append(hr*0.6)
+
+    def create_star(self,tgdata):
+        # single central point mass (sink), small softening -> clean Kepler potential
+        massprim = 1.0
+        softprim = 0.05
+        sinkprim = -1.0
+        tsdata = np.array([massprim,0.0,0.0,0.0,0.0,0.0,0.0,0.0,sinkprim,softprim,0.0])
+        return tsdata, 1
+
+    def getrhoi(self,i):
+        return self.rhozero
+
+    def getveli(self,i):
+        rcyl=np.sqrt(self.x[i]*self.x[i]+self.y[i]*self.y[i])
+        # pure (cold) Keplerian rotation about the central mass GM=1
+        vazi=rcyl**(-0.5)
+        vx,vy,vz = self.transform_coordinate(0.0,vazi,0.0,self.x[i],self.y[i],self.z[i],"cyl","cart")
+        return vx,vy,vz
+
+    def transform_coordinate(self,v1,v2,v3,x,y,z,fromcord,tocord):
+
+        if(fromcord=="cyl"):
+            r=np.sqrt(x**2+y**2)
+            if(tocord=="cart"):
+                ux=v1*x/r-v2*y/r
+                uy=v1*y/r+v2*x/r
+                uz=v3
+
+        return ux,uy,uz

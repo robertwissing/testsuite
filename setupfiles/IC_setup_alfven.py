@@ -17,13 +17,14 @@ class setup_alfven(object):
     ngas=0
     ndark=0
     nstar=0
+    inflow=0
     ndim=3
     time=0
     gamma=5./3.
     periodic=1
     deltastep=0.01
     nsteps=1000
-    freqout=200
+    freqout=100
     dmsolunit=1.0
     dkpcunit=1.0
     molweight=1

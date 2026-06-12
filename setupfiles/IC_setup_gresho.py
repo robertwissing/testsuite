@@ -19,6 +19,7 @@ class setup_gresho(object):
     dICdensR = 1.0 
     dICdensinner = 1.0 # calculated depending on mass
     dICdensouter = 1.0
+    inflow=0
     rhoit=0
     ns=64
     npart=0
@@ -31,7 +32,7 @@ class setup_gresho(object):
     periodic=1
     deltastep=0.01
     freqout=100
-    nsteps=100
+    nsteps=300
     dmsolunit=1.0
     dkpcunit=1.0
     adi=1
