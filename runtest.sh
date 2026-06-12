@@ -1,8 +1,8 @@
 #!/bin/bash
 
-export SPHEXA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/sphexa/sphexa_b/build/main/src/sphexa/
-export GASOLINE_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/gasoline_claude/gasoline_claude/
-export CHANGA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/ChaNGA_claude/hpc_setup/CHANGA/changaMHDTP/
+export SPHEXA_DIR=
+export GASOLINE_DIR=
+export CHANGA_DIR=
 
 #Directory for the ic generator and the setupfiles (you have to do make for icgenerator/mdl/mpi and make mpi for icgenerator/gasoline/
 current_dir=$(pwd -P)
