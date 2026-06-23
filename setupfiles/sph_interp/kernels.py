@@ -39,6 +39,30 @@ def cnorm3D(h):
     return 1.0 / (np.pi * h * h * h)
 
 
+@njit(cache=True)
+def gcum3D(q):
+    """Dimensionless 3D radial mass profile G(q) = int_0^q w(s) s^2 ds.
+
+    The kernel mass enclosed within radius r is M(r) = 4 * G(r/h) (so M(2h) = 1,
+    since G(2) = 1/4), and the radial mass density g(R) = int_0^R W(r) r^2 dr =
+    G(R/h) / pi. Used by the exact (Petkova) cell integral, where each cell is
+    decomposed into cones from the particle and the cone integral is
+    int_solidangle g(R(Omega)) dOmega. Closed form (piecewise polynomial), so it
+    is breakpoint-exact at q=1 and q=2 — unlike the old per-face D2/D3 corrections.
+    """
+    if q <= 0.0:
+        return 0.0
+    if q >= 2.0:
+        return 0.25
+    q3 = q * q * q
+    if q <= 1.0:
+        return q3 / 3.0 - 0.3 * q3 * q * q + 0.125 * q3 * q3
+    # 1 < q < 2:  -1/60 + 0.25 (8 q^3/3 - 3 q^4 + 6 q^5/5 - q^6/6)
+    return (-1.0 / 60.0
+            + 0.25 * (8.0 * q3 / 3.0 - 3.0 * q3 * q + 1.2 * q3 * q * q
+                      - q3 * q3 / 6.0))
+
+
 # --------------------------------------------------------------------------- #
 #  Column-integrated kernel (for 2D projections)
 # --------------------------------------------------------------------------- #

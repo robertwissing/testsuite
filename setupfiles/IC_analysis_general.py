@@ -109,13 +109,23 @@ def read_tufac(run_arg, default=1.0):
 
     gasoline stores specific internal energy as a temperature; dTuFac is the
     conversion (dGasConst = (gamma-1) dTuFac in the same log). Returns `default`
-    (1.0, i.e. u=T) with a warning if dTuFac is not found."""
+    (1.0, i.e. u=T) with a warning if it can't be determined.
+
+    Codes that don't log `dTuFac` directly (e.g. ChaNGa) still log the ideal-gas
+    constituents, so we reconstruct it from the same relation:
+        dTuFac = dGasConst / (dConstGamma - 1) / dMeanMolWeight."""
     val = read_log_param(run_arg, "dTuFac", None)
-    if val is None:
-        print(f"read_tufac: dTuFac not found in a .log for '{run_arg}'; "
-              f"assuming u=T (factor {default}).", file=sys.stderr)
-        return default
-    return val
+    if val is not None:
+        return val
+    # Backup: derive from the ideal-gas params (dGasConst = (gamma-1) mu dTuFac).
+    gc = read_log_param(run_arg, "dGasConst", None)
+    gamma = read_log_param(run_arg, "dConstGamma", None)
+    mu = read_log_param(run_arg, "dMeanMolWeight", 1.0)
+    if gc is not None and gamma is not None and gamma != 1.0 and mu:
+        return gc / (gamma - 1.0) / mu
+    print(f"read_tufac: dTuFac not found (and dGasConst/dConstGamma absent) in a "
+          f".log for '{run_arg}'; assuming u=T (factor {default}).", file=sys.stderr)
+    return default
 
 
 # Code->physical (cgs) unit conversion for a gasoline run (G=1 system).
@@ -161,14 +171,18 @@ def code_units(run_arg):
     )
 
 
-# Column index of each field in the gasoline run '.log' step rows. The order is
-# fixed by main.c's per-step fprintf (and documented in master.c msrLogHeader):
-#   [dTime] [z] [Etot] [Ekin] [Epot] [Eth] [Emag] [totentrop] [totenstro]
-#   [Lx Ly Lz] [Llinx Liny Llinz] [cmx cmy cmz] [MWxy MWyz MWzx] [RSxy RSyz RSzx]
-#   [divBAvg divBMax divBerrAvg divBerrMax] [alphaAvg alphaMax]
-#   [betaMax betaAvg betaMin] [etaresAvg kinviscAvg] [rmsmach vrms]
-#   [rhogasAvg rhogasMax] [Q1Avg Q1Max Q2Avg Q2Max E0Avg E0Max Q4Avg Q4Max]
-#   [WallTime dWMax dImax dEMax dMultiEff]
+# Canonical per-step column names -- the vocabulary the analysis scripts request
+# from `read_log_series`. Both gasoline and ChaNGa emit a NAMED column-header line
+# in their '.log' (see `_parse_log_header`), so the series is parsed BY NAME; this
+# survives column additions/reordering across code versions and lets a different
+# code (ChaNGa) expose a different subset. LOG_COLUMNS below is only the LEGACY
+# positional fallback, used when a log has no recognisable header line (e.g. the
+# smoke-test synthetic logs, or very old runs).
+#
+# gasoline's header is '# [dTime] [z] [Etot] [Ekin] [Epot] [Eth] [Emag] [EClean]
+# [totentrop] [totenstro] [Lx] [Ly] [Lz] ...' (the positional map below predates
+# the [EClean] insertion, so it is misaligned from totentrop onward for current
+# builds -- another reason to parse by name).
 LOG_COLUMNS = {
     "dTime": 0, "z": 1, "Etot": 2, "Ekin": 3, "Epot": 4, "Eth": 5, "Emag": 6,
     "totentrop": 7, "totenstro": 8, "Lx": 9, "Ly": 10, "Lz": 11,
@@ -182,21 +196,61 @@ LOG_COLUMNS = {
     "WallTime": 47, "dWMax": 48, "dImax": 49, "dEMax": 50, "dMultiEff": 51,
 }
 
+# Foreign (per-code) column-name -> canonical name. gasoline already writes the
+# canonical names (its header tokens are just '[name]'), so only codes with a
+# different vocabulary need entries here. Add a code by adding its column names.
+LOG_NAME_ALIASES = {
+    # --- ChaNGa (Main::writeOutputLog header: "time redshift TotalEVir TotalE
+    #     Kinetic Virial Potential TotalECosmo Ethermal Lx Ly Lz Wallclock") ---
+    "time": "dTime", "redshift": "z", "TotalE": "Etot", "Kinetic": "Ekin",
+    "Potential": "Epot", "Ethermal": "Eth", "Wallclock": "WallTime",
+    # ChaNGa-only columns with no gasoline analogue (TotalEVir, Virial,
+    # TotalECosmo) pass through unmapped and are simply not requestable.
+}
+
+
+def _canon_log_name(tok):
+    """Canonical column name for a raw header token: strips gasoline's '[ ]'
+    ('[Etot]' -> 'Etot') and applies LOG_NAME_ALIASES (ChaNGa 'Kinetic' -> 'Ekin').
+    Unknown tokens pass through unchanged."""
+    tok = tok.strip().strip("[]")
+    return LOG_NAME_ALIASES.get(tok, tok)
+
+
+def _parse_log_header(line):
+    """If `line` is a per-step column header, return {canonical_name: index}; else
+    None. A header is a '#' comment line whose first column is the time -- this
+    recognises both the gasoline '# [dTime] [z] [Etot] ...' and the ChaNGa
+    '# time redshift TotalEVir TotalE ...' forms while rejecting prose/param lines."""
+    s = line.strip()
+    if not s.startswith("#"):
+        return None
+    toks = s.lstrip("#").split()
+    if not toks:
+        return None
+    names = [_canon_log_name(t) for t in toks]
+    if names[0] != "dTime":
+        return None
+    return {name: i for i, name in enumerate(names)}
+
 
 def read_log_series(run_arg, columns):
-    """Per-timestep series from the gasoline run '.log' step rows.
+    """Per-timestep series from the run '.log' step rows, code-agnostically.
 
-    gasoline appends one row per timestep to '<runname>.log' (the columns are
-    LOG_COLUMNS), so the energy/divergence diagnostics there are sampled far more
-    densely than the periodic snapshot dumps -- the preferred source for any
-    quantity-vs-time plot.
+    A code (gasoline, ChaNGa, ...) appends one row per timestep to '<runname>.log',
+    so the energy/divergence diagnostics there are sampled far more densely than
+    the periodic snapshot dumps -- the preferred source for any quantity-vs-time
+    plot. The columns are mapped BY NAME from each log's header line (see
+    `_parse_log_header`); a log with no recognisable header falls back to the
+    legacy positional LOG_COLUMNS.
 
-    `columns` is a sequence of names from LOG_COLUMNS (include "dTime" for the
-    time axis). Returns a dict name -> np.ndarray, rows sorted by dTime, or None
-    if no '.log' or no parseable data rows are found. Comment / blank / RESTART
-    ('#') lines and short rows are skipped."""
-    idx = [LOG_COLUMNS[c] for c in columns]
-    need = max(idx + [0]) + 1
+    `columns` is a sequence of canonical names (from LOG_COLUMNS; include "dTime"
+    for the time axis, which is always columns[0]). Returns a dict name ->
+    np.ndarray, rows sorted by time, or None if no '.log' yields all requested
+    columns (e.g. a ChaNGa log has no Emag/divB) -- letting callers fall back to
+    per-snapshot computation via `series_from_log_or_snapshots`. Comment / blank /
+    RESTART ('#') lines and short rows are skipped; a restart-appended header
+    re-maps the columns for the rows that follow it."""
     rows = []
     for log in _find_logs(run_arg):
         try:
@@ -204,19 +258,32 @@ def read_log_series(run_arg, columns):
         except OSError:
             continue
         with fh:
+            colmap = None      # name->index from this log's header (None = none yet)
+            idx = None         # resolved indices for `columns`; False = unsatisfiable
             for line in fh:
+                hdr = _parse_log_header(line)
+                if hdr is not None:
+                    colmap, idx = hdr, None   # re-resolve against the new header
+                    continue
                 s = line.strip()
                 if not s or s.startswith("#"):
                     continue
+                if idx is None:
+                    cmap = colmap if colmap is not None else LOG_COLUMNS
+                    try:
+                        idx = [cmap[c] for c in columns]
+                    except KeyError:
+                        idx = False           # a requested column is absent here
+                if idx is False:
+                    break                     # this log can't satisfy the request
                 parts = s.split()
-                if len(parts) < need:
+                if len(parts) <= max(idx):
                     continue
                 try:
-                    t = float(parts[0])
                     vals = [float(parts[i]) for i in idx]
                 except ValueError:
                     continue
-                rows.append((t, vals))
+                rows.append((vals[0], vals))  # columns[0] is the time axis
     if not rows:
         return None
     rows.sort(key=lambda r: r[0])

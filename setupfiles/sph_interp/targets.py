@@ -353,6 +353,8 @@ class VoronoiGrid:
     lo: np.ndarray
     hi: np.ndarray
     periodic: object = (False, False, False)
+    cell_parent: object = None      # (Ntotal,) ghost->central index; None = none
+    ncentral: object = None         # number of real (central) cells
 
     def __post_init__(self):
         self.gen = np.ascontiguousarray(self.gen, dtype=np.float64).reshape(-1, 3)
@@ -369,22 +371,45 @@ class VoronoiGrid:
         if np.isscalar(p):
             p = (bool(p), bool(p), bool(p))
         self.periodic = tuple(bool(x) for x in p)
+        if self.cell_parent is None:                  # plain (non-ghost) mesh
+            self.ncentral = self.gen.shape[0]
+        else:
+            self.cell_parent = np.ascontiguousarray(self.cell_parent,
+                                                    dtype=np.int64).ravel()
+            self.ncentral = int(self.ncentral)
 
     @property
     def ncell(self):
+        """Number of REAL cells (central; ghosts are deposit bookkeeping only)."""
+        return self.ncentral
+
+    @property
+    def ntotal(self):
+        """Total stored cells including periodic ghost images (for the deposit)."""
         return self.gen.shape[0]
 
     @property
     def box(self):
         return self.hi - self.lo
 
+    def fold_to_central(self, arr):
+        """Sum a per-(total-)cell deposit array down onto the central cells:
+        ghost-image contributions are added back into their parent cell. Returns
+        the first `ncentral` rows when there are no ghosts."""
+        arr = np.asarray(arr)
+        if self.cell_parent is None:
+            return arr[:self.ncentral]
+        out = np.zeros((self.ncentral,) + arr.shape[1:], dtype=arr.dtype)
+        np.add.at(out, self.cell_parent, arr)
+        return out
+
     def centres(self):
-        """(Ncell,3) generator points (the natural cell centres)."""
-        return self.gen
+        """(Ncell,3) generator points of the REAL cells (central)."""
+        return self.gen[:self.ncentral]
 
     def volumes(self):
-        """(Ncell,) cell volumes."""
-        return self.volume
+        """(Ncell,) volumes of the REAL cells (central)."""
+        return self.volume[:self.ncentral]
 
     def edges(self):
         """Voronoi cells are polyhedra, not axis-aligned boxes — there is no
@@ -392,17 +417,33 @@ class VoronoiGrid:
         return self.cf_start, self.fv_start, self.fvx, self.fvy, self.fvz
 
     @classmethod
-    def from_points(cls, points, bounds=None, periodic=False, dispersion=None):
+    def from_points(cls, points, bounds=None, periodic=False, dispersion=None,
+                    ghost_pad=0.25):
         """Tessellate `points` (Ncell,3) into Voronoi cells via pyvoro.
 
         bounds     : [[xlo,xhi],[ylo,yhi],[zlo,zhi]] domain (default: padded
                      point extent). pyvoro requires every point strictly inside.
-        periodic   : bool or (3,) — periodic tessellation (cells wrap).
+        periodic   : bool or (3,) — a true PERIODIC tessellation via GHOST IMAGES
+                     (see `_from_points_periodic`): boundary generators are
+                     replicated into their neighbouring periodic images, the lot
+                     is tessellated non-periodically, and the central cells are
+                     then the exact periodic Voronoi cells (Sum volume = box
+                     volume exactly, no boundary padding). The ghost cells are
+                     retained for the deposit (folded back into their parent by
+                     `fold_to_central`), so a kernel crossing a face wraps.
         dispersion : pyvoro block-sizing hint (~ the typical generator spacing);
                      default = the mean spacing (domain_volume / N)**(1/3). This
                      is what sizes voro++'s internal block grid — setting it to a
                      large value (e.g. the box size) collapses the mesh into one
                      giant block and makes the build O(N^2) (and memory-hungry).
+        ghost_pad  : periodic only — the image shell width as a fraction of the
+                     box per axis (generators within this distance of a boundary
+                     are replicated across it). Acts as a FLOOR: the shell is
+                     auto-grown to at least 3x the mean generator spacing, so
+                     SPARSE meshes (few generators -> large cells) still close
+                     their boundary cells correctly (otherwise Sum cell vol > box
+                     vol, e.g. +5% at N=32). 0.25 already covers dense/near-
+                     uniform meshes; raise it only for strongly clustered ones.
         """
         import pyvoro
         pts = np.ascontiguousarray(np.asarray(points, dtype=np.float64).reshape(-1, 3))
@@ -417,36 +458,99 @@ class VoronoiGrid:
         else:
             lo = np.array([float(bounds[a][0]) for a in range(3)])
             hi = np.array([float(bounds[a][1]) for a in range(3)])
-        limits = [[lo[a], hi[a]] for a in range(3)]
-        if dispersion is None:
-            dispersion = float((np.prod(hi - lo) / N) ** (1.0 / 3.0))
         per = periodic
         if np.isscalar(per):
             per = [bool(per)] * 3
         else:
             per = [bool(x) for x in per]
+
+        if any(per):
+            return cls._from_points_periodic(pts, lo, hi, per, dispersion,
+                                             ghost_pad)
+
+        limits = [[lo[a], hi[a]] for a in range(3)]
+        if dispersion is None:
+            dispersion = float((np.prod(hi - lo) / N) ** (1.0 / 3.0))
         cells = pyvoro.compute_voronoi(pts.tolist(), limits, dispersion,
                                        radii=[], periodic=per)
         return cls._from_pyvoro(cells, lo, hi, per)
 
     @classmethod
-    def from_particles(cls, particles, bounds=None, periodic=None, dispersion=None):
+    def _from_points_periodic(cls, pts, lo, hi, per, dispersion, ghost_pad):
+        """Periodic Voronoi by GHOST IMAGES: replicate near-boundary generators
+        into their periodic images, tessellate the lot non-periodically over a
+        padded box, keep the N central cells as the real (periodic) cells and the
+        images as ghosts (`cell_parent` -> central index). The central cells are
+        complete and exact, and tile EXACTLY one period (Sum volume = box vol)."""
+        import pyvoro
+        N = pts.shape[0]
+        L = hi - lo
+        # image shell half-width. The shell MUST span the Voronoi-neighbour reach
+        # (~ a few generator spacings) or boundary cells are not cut by their
+        # periodic images -> they bloat and Sum(cell vol) > box vol (badly wrong
+        # for SPARSE meshes, e.g. +5% at N=32 with the fixed 0.25). So grow the
+        # shell to at least 3x the mean generator spacing; the user's ghost_pad
+        # fraction acts as a floor (and still covers near-uniform dense meshes).
+        spacing = float((np.prod(L) / max(N, 1)) ** (1.0 / 3.0))
+        margin = np.maximum(ghost_pad * L, 3.0 * spacing)
+        # central generators first, then the periodic images that fall inside the
+        # padded box [lo-margin, hi+margin].
+        gens = [pts]
+        parents = [np.arange(N, dtype=np.int64)]
+        offs = [(-1, 0, 1) if per[a] else (0,) for a in range(3)]
+        for ox in offs[0]:
+            for oy in offs[1]:
+                for oz in offs[2]:
+                    if ox == 0 and oy == 0 and oz == 0:
+                        continue
+                    shift = np.array([ox * L[0], oy * L[1], oz * L[2]])
+                    q = pts + shift
+                    keep = np.ones(N, dtype=bool)
+                    for a in range(3):
+                        keep &= (q[:, a] >= lo[a] - margin[a]) & \
+                                (q[:, a] <= hi[a] + margin[a])
+                    if keep.any():
+                        gens.append(q[keep])
+                        parents.append(np.where(keep)[0].astype(np.int64))
+        gen_all = np.ascontiguousarray(np.concatenate(gens, axis=0))
+        parent_all = np.concatenate(parents)
+        ntot = gen_all.shape[0]
+        plo = lo - margin; phi = hi + margin
+        limits = [[plo[a], phi[a]] for a in range(3)]
+        if dispersion is None:
+            dispersion = float((np.prod(phi - plo) / ntot) ** (1.0 / 3.0))
+        cells = pyvoro.compute_voronoi(gen_all.tolist(), limits, dispersion,
+                                       radii=[], periodic=[False, False, False])
+        vg = cls._from_pyvoro(cells, lo, hi, per)        # lo/hi = the PHYSICAL box
+        vg.cell_parent = np.ascontiguousarray(parent_all, dtype=np.int64)
+        vg.ncentral = N
+        return vg
+
+    @classmethod
+    def from_particles(cls, particles, bounds=None, periodic=None, dispersion=None,
+                       ghost_pad=0.25):
         """Tessellate the particle positions themselves into Voronoi cells.
 
         bounds default to the particle box (centered) when known, else the padded
-        particle extent; periodic defaults to particles.periodic.
+        particle extent; periodic defaults to particles.periodic. For a periodic
+        box the bounds ARE the period (no edge padding — ghost images handle the
+        boundary), so Sum cell volume = box volume exactly.
         """
         pos = np.ascontiguousarray(particles.pos, dtype=np.float64)
-        if bounds is None and particles.box is not None:
-            half = 0.5 * np.asarray(particles.box, dtype=np.float64).reshape(3)
-            plo = pos.min(axis=0); phi = pos.max(axis=0)
-            lo = np.minimum(-half, plo) - 1e-6
-            hi = np.maximum(half, phi) + 1e-6
-            bounds = [[lo[a], hi[a]] for a in range(3)]
         if periodic is None:
             periodic = particles.periodic
+        per_any = (periodic if np.isscalar(periodic) else any(periodic))
+        if bounds is None and particles.box is not None:
+            half = 0.5 * np.asarray(particles.box, dtype=np.float64).reshape(3)
+            if per_any:                                  # period == the box, exactly
+                bounds = [[-half[a], half[a]] for a in range(3)]
+            else:
+                plo = pos.min(axis=0); phi = pos.max(axis=0)
+                lo = np.minimum(-half, plo) - 1e-6
+                hi = np.maximum(half, phi) + 1e-6
+                bounds = [[lo[a], hi[a]] for a in range(3)]
         return cls.from_points(pos, bounds=bounds, periodic=periodic,
-                               dispersion=dispersion)
+                               dispersion=dispersion, ghost_pad=ghost_pad)
 
     @staticmethod
     def _from_pyvoro(cells, lo, hi, periodic):

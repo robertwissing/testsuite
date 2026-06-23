@@ -1,0 +1,9 @@
+# End-to-end benchmark work dir (generated pre-ICs, glasses, analysis figures)
+_pipeline/
+# Planning scratch (generated pre-ICs)
+_scratch/
+
+# Python bytecode / pytest cache
+__pycache__/
+*.pyc
+.pytest_cache/

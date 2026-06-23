@@ -62,16 +62,19 @@ def convertfile(entry,output):
     alpha = np.ones(num_particles, dtype=np.float32) * alphamin
 
 
-    file_exa = h5py.File(output+".h5", "w")
-
-    tree = KDTree(positions)
-    smoothings = np.zeros(num_particles)
-    for i, p in enumerate(positions):
-        distances, indices = tree.query(p, k=100)
-        smoothings[i] = np.max(distances) / 2.
-
+    # batch kNN on all cores (a per-particle Python loop here took hours at
+    # large N); k=100 includes self, h = half the distance to the 99th
+    # neighbor, matching sphexa ng0=100
+    pos64 = positions.astype(np.float64)
+    tree = KDTree(pos64)
+    distances, _ = tree.query(pos64, k=100, workers=-1)
+    smoothings = distances[:, -1] / 2.
 
     minDt = 1e-9
+
+    # open the output only now: everything slow is done, so an interrupted
+    # run can no longer leave a truncated .h5 behind for sphexa to choke on
+    file_exa = h5py.File(output+".h5", "w")
 
     file_exa["/Step#0/x"] = positions[:, 0]
     file_exa["/Step#0/y"] = positions[:, 1]

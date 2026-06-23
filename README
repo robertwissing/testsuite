@@ -136,6 +136,90 @@ coldkeplerian, mhdisowave): pass several runs at different resolutions plus
 --convergence to plot the error vs n_x against the ideal n_x^-2 line, e.g.
   python setupfiles/IC_analysis_gresho.py <dir_N32> <dir_N64> <dir_N128> --convergence
 
+Continuous integration (regression-gating a code)
+--------------------------------------------------
+
+The bless / --reference / --reg-tol workflow above is what lets an SPH code wire
+this testsuite into its own CI: every change to the code is automatically
+validated by re-running a small, low-resolution subset of the tests and gating
+on the blessed metrics. The pattern is code-agnostic (gasoline / ChaNGa /
+SPH-EXA -- anything runtest.sh can drive):
+
+  1. Pick a cheap matrix: a few tests at low Nsmooth/Nres on a lattice, e.g.
+         sedov 32 16 0      orzag 32 16 0
+  2. Bless once, with the EXACT build + config CI will later use (same flags,
+     same resolution, same particle-distribution), so the baseline matches what
+     the gate runs:
+         ./runtest.sh -r sedov 32 16 0
+     This commits test_cases/<test>/references/<runname>/ into the repo.
+  3. On each code change, rebuild, re-run the same rows, and gate:
+         ./runtest.sh sedov 32 16 0
+         python setupfiles/IC_analysis_sedov.py <run-dir> --reference --reg-tol 1e-1
+     A non-zero exit (worst residual over tolerance) fails the build. Use one
+     analysis step PER test so the CI UI shows a separate pass/fail per case.
+
+Keep reg-tol loose at low resolution (1e-1 is typical) -- it catches gross
+regressions without flagging run-to-run noise; tighten it for higher-resolution
+or deterministic tests.
+
+A complete worked example for the ChaNGa fork (self-contained GitHub Actions
+workflow, the curated matrix, and a local build+bless helper) lives under ci/ --
+see ci/CHANGA_CICD_PLAN.md. Note: the GitHub workflow itself must live in the
+code's OWN repo (.github/workflows/), since Actions only runs workflows from the
+repo under test; this testsuite supplies the tests, analysis, and committed
+references that the workflow pulls in.
+
+Resampling an IC: splitting / merging particles
+-----------------------------------------------
+
+To change the particle count of an existing tipsy snapshot (and all its aux
+fields -- BField, iord, ...) without regenerating a glass from scratch, use the
+glassresample tool. Splitting raises resolution (one particle -> N children,
+mass and extensive quantities like u/B divided among them); merging lowers it
+(N particles -> 1, quantities summed/averaged):
+
+  icgenerator/glassgen_python/glassresample <tipsy.NNNNN> [options]
+
+  glassresample pre.00000 --op split --factor 8        # 8x more particles
+  glassresample fine.00000 --op merge --factor 8 -o coarse
+
+The box (needed for periodic wrapping) and output name default from the input:
+it reads <input>.param if present and writes <input>_<op>.00000 plus re-emitted
+aux files with the new count. Override with --param / --box LX LY LZ / --open
+and -o. Run `glassresample --help` for the full option list (--dist, --margin,
+-s, ...). A split/merge is geometric only -- for a clean glass at the new count,
+relax the result afterwards (the relaxation path, runtest.sh type 2 / glassrelax).
+
+Interpolating a snapshot onto a grid or mesh
+--------------------------------------------
+
+To resample an SPH snapshot from particles onto a structured target (e.g. to
+hand off to a grid code, or for visualisation/analysis) use the sph_interp
+package via its wrapper:
+
+  ./interpolate_to_grid.sh INPUT OUTPUT [options]
+  ./interpolate_to_grid.sh              # no args -> interactive prompts
+
+  TARGETS (--grid):          uniform | amr | voronoi | projection
+  METHODS (--method):        petkova (exact, mass-conserving; default) | sph
+                             (fast, approximate)
+  OUTPUT (--output-format):  npz | hdf5 | ramses | cell-table | native
+
+Examples:
+  # 256^3 uniform SPH density grid -> npz
+  ./interpolate_to_grid.sh run/snap.00100 rho.npz --grid uniform --npx 256
+
+  # mass-conserving AMR octree of rho+velocity, exported as RAMSES HDF5
+  ./interpolate_to_grid.sh run/snap.00100 mesh.h5 --grid amr --method petkova \
+      --fields rho,vx,vy,vz --output-format ramses
+
+  # xy column-density projection map
+  ./interpolate_to_grid.sh run/snap.00100 col.npz --grid projection \
+      --axes xy --project column
+
+To see every target geometry rendered side by side on one snapshot, run
+  ./interp_demo.sh [SNAPSHOT]
+
 Converting between tipsy and SPH-EXA
 ------------------------------------
 

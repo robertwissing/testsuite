@@ -1,11 +1,12 @@
 
-## Setup for ORZAG-TANG
+## Setup for MHDCOLLAPSE
 import numpy as np
 import IC_distribute as distribute
 import IC_fixdens as fixdens
 import IC_smoothlength as smth
 from numba import njit
 import readtipsy as tip
+import IC_denstable as denstable
 class setup_mhdcollapse(object):
     dICdensRsmooth = 0.0015
     dICdensprofile = 3
@@ -64,6 +65,8 @@ class setup_mhdcollapse(object):
     rhoin = 1.0
     rhoout = 1.0
     Rin = 0.015
+    Rtab = 1.0
+    R = 1.0  # written into the densitytable_xdr header
 
     def __init__(self):
         pass
@@ -129,7 +132,32 @@ class setup_mhdcollapse(object):
              
          self.npart=len(self.x)
          self.ngas=self.npart
-         totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound + (self.rhoin-self.rhoout)*4/3*np.pi*self.Rin**3)
+         if distri==1:
+             # random pre-IC to be relaxed against the density table:
+             # equal-mass particles must integrate the *smoothed* sigmoid
+             # profile (not the sharp sphere), or the relaxer cannot reach
+             # rho == rho0 everywhere. The profile is rhoout beyond the
+             # ramp, so integrate the excess radially over the box volume.
+             rq = np.linspace(0.0, 0.5*min(self.dxbound, self.dybound,
+                                           self.dzbound), 200001)
+             totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound
+                        + np.trapz((self.getrho_vec(rq) - self.rhoout)
+                                   * 4.0*np.pi*rq**2, rq))
+             print("table-integrated total mass ", totmass)
+             # 1D radial density table for the glass relaxer
+             # (glassgen: --table densitytable_xdr --direction r_sph)
+             ntab = 10000
+             dimtab = 1
+             self.Rtab = np.sqrt(self.dxbound**2 + self.dybound**2
+                                 + self.dzbound**2)
+             self.R = self.Rtab
+             gridtab, rhotab = denstable.generate_density_table(
+                 self, n=ntab, dim=dimtab)
+             denstable.write_density_table_xdr(
+                 self, "densitytable_xdr", gridtab, rhotab,
+                 n=ntab, dim=dimtab)
+         else:
+             totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound + (self.rhoin-self.rhoout)*4/3*np.pi*self.Rin**3)
          self.mass = [totmass/self.npart]*self.npart
          
          if vm==1:
@@ -189,9 +217,16 @@ class setup_mhdcollapse(object):
          
     def getrhoi(self,i):
         radius2=self.x[i]**2 + self.y[i]**2+self.z[i]**2
-        rpartp = np.sqrt(radius2)
-        dens =  self.rhoout + (self.rhoin-self.rhoout)*1.0/(1.0+np.exp(-(self.dICdensR-rpartp)/self.dICdensRsmooth));
-        return dens
+        return self.getrho(np.sqrt(radius2))
+
+    def getrho(self,r):
+        # logistic sigmoid sphere edge (C profile 3 on spherical r), in the
+        # overflow-safe tanh form: 1/(1+exp(-x)) = (1+tanh(x/2))/2
+        s = 0.5*(1.0+np.tanh(0.5*(self.Rin-r)/self.dICdensRsmooth))
+        return self.rhoout + (self.rhoin-self.rhoout)*s
+
+    def getrho_vec(self,r_vals):
+        return self.getrho(np.asarray(r_vals))
     
     def getP(self,rho):
         gtosol = 5.0279933*10**(-34)*self.dmsolunit

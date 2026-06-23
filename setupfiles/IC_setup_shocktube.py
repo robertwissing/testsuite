@@ -160,9 +160,15 @@ class setup_shocktube(object):
                    self.vy.append(self.rightstate[3]*np.exp(-8*(self.x[i]-lim)))
                    self.vz.append(self.rightstate[4]*np.exp(-8*(self.x[i]-lim)))
                 else:
-                   self.vx.append(self.rightstate[2]*self.rightstate[0]/self.rho[i])
-                   self.vy.append(self.rightstate[3]*self.rightstate[0]/self.rho[i])
-                   self.vz.append(self.rightstate[4]*self.rightstate[0]/self.rho[i])
+                   # State velocities verbatim (matches lattice mode, where
+                   # rho_i equals the state density so any ratio is 1). Do NOT
+                   # scale by self.rho here: for a glass IC that column is the
+                   # relaxer's SPH estimate carrying a ~+7% kernel bias, and
+                   # the old mixed conventions (rho_i/rho_l left, rho_r/rho_i
+                   # right) turned that bias into a net bulk drift of the tube.
+                   self.vx.append(self.rightstate[2])
+                   self.vy.append(self.rightstate[3])
+                   self.vz.append(self.rightstate[4])
                 #if distri==2:
                 #    uuright=self.rightstate[1]/(gam1*self.rho[i])
                 self.u.append(uuright)
@@ -175,9 +181,10 @@ class setup_shocktube(object):
                    self.vy.append(self.leftstate[3]*np.exp(8*(lim+self.x[i])))
                    self.vz.append(self.leftstate[4]*np.exp(8*(lim+self.x[i])))
                 else:
-                   self.vx.append(self.leftstate[2]*self.rho[i]/self.leftstate[0])
-                   self.vy.append(self.leftstate[3]*self.rho[i]/self.leftstate[0])
-                   self.vz.append(self.leftstate[4]*self.rho[i]/self.leftstate[0])
+                   # State velocities verbatim -- see the right-side comment.
+                   self.vx.append(self.leftstate[2])
+                   self.vy.append(self.leftstate[3])
+                   self.vz.append(self.leftstate[4])
                 #if distri==2:
                 #    uuleft=self.leftstate[1]/(gam1*self.rho[i])
                 self.u.append(uuleft)

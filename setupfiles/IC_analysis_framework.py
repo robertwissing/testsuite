@@ -871,6 +871,22 @@ def run_cli(test, param_spec, analyze, analytic, metrics, description="",
 
 
 # --------------------------------------------------------------------------- #
+#  Soft warnings (do NOT affect a step's pass/fail -- unlike the --reg-tol gate)
+# --------------------------------------------------------------------------- #
+
+def emit_warning(title, message):
+    """Emit a SOFT warning that never changes the exit code.
+
+    Always prints a human-readable `WARNING [title]: message` line (so local runs
+    surface it too), and -- when running under GitHub Actions -- additionally
+    emits a `::warning::` workflow command so the PR/checks UI shows a yellow
+    annotation. The annotation must be a single line (no embedded newlines)."""
+    print(f"WARNING [{title}]: {message}", file=sys.stderr)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning title={title}::{message}")
+
+
+# --------------------------------------------------------------------------- #
 #  Standalone CLI scaffold (the analogue of run_cli for the standalone scripts
 #  that build their own figures rather than the metric-vs-time plot_compare)
 # --------------------------------------------------------------------------- #

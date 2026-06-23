@@ -44,7 +44,7 @@ from IC_analysis_framework import (
     bless_render_specs, render_ref_overlay_path, movie_render_specs,
     select_at_time, binned_profile, standalone_cli,
     thermal_pressure, magnetic_pressure, ke_density,
-    series_from_log_or_snapshots,
+    series_from_log_or_snapshots, emit_warning,
 )
 from IC_analysis_general import (
     find_files, loaddata, read_vector_aux, read_tufac,
@@ -367,7 +367,8 @@ def plot_profiles(inputs, labels, t, params, save=None, ref_table=None):
 #  Total energy vs time (conservation; compare against SPLASH / input ublast)
 # --------------------------------------------------------------------------- #
 
-def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None):
+def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
+                        warn_tol=None):
     """Energy vs time for each run.
 
     For the hydro point/kernel cases (select 1/2, betain=0) each energy is plotted
@@ -423,6 +424,15 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None):
                 rel = 100.0 * (sim - ana) / ana if ana else float("nan")
                 print(f"   {name:<7s} sim={sim:8.4g}  analytic={ana:8.4g}  "
                       f"rel.diff={rel:+6.2f}%")
+                # Soft energy-conservation warning on the TOTAL energy only --
+                # informational, never changes the exit code (the --reg-tol gate
+                # on the density profile is the hard pass/fail).
+                if (name == "total" and warn_tol is not None and ana
+                        and abs((sim - ana) / ana) > warn_tol):
+                    emit_warning("Sedov energy conservation",
+                                 f"{lab}: total energy {rel:+.2f}% vs analytic at "
+                                 f"t={ts[j]:.4g} exceeds the {100 * warn_tol:g}% "
+                                 f"soft tolerance")
 
     if hydro_blast:
         ax.axhline(1.0, color="k", ls="--", lw=1.2, label="analytic (=1)")
@@ -645,7 +655,8 @@ def _plot(inputs, labels, params, args):
     ref = getattr(args, "ref_table", None)
     plot_profiles(inputs, labels, args.time, params, save=args.save, ref_table=ref)
     plot_energy_vs_time(inputs, labels, args.time, params, save=args.save,
-                        ref_table=ref)
+                        ref_table=ref, warn_tol=getattr(args, "energy_warn_tol",
+                                                         None))
     if betain != 0:                 # field amplification + divergence cleanliness
         plot_mhd_profiles(inputs, labels, args.time, save=args.save)
     if args.render:
@@ -659,12 +670,23 @@ def _plot(inputs, labels, params, args):
                            extent=extent)
 
 
+def _add_args(parser):
+    parser.add_argument(
+        "--energy-warn-tol", type=float, default=0.05,
+        help="soft gate: emit a WARNING (and, under GitHub Actions, a yellow "
+             "::warning:: annotation) when |total energy / analytic - 1| at the "
+             "comparison time exceeds this fraction (default 0.05 = 5%%). This is "
+             "informational only -- it NEVER changes pass/fail (the --reg-tol "
+             "density gate does). Set to a large value to silence it.")
+
+
 def main():
     standalone_cli(
         "sedov", PARAM_SPEC, _plot,
         reference_table=lambda inp, params, args: reference_table(inp, args.time,
                                                                   params),
         description="Sedov-Taylor blast analysis.",
+        add_arguments=_add_args,
         reg_keys=("rho",), time_default=DEFAULT_TIME,
         time_help=f"comparison time (default {DEFAULT_TIME:g}; before the shock "
                   f"reaches the box edge)",

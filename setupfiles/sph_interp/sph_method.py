@@ -312,17 +312,17 @@ def interpolate_voronoi_sph(particles, grid, values=None, hmin=None,
         raise TypeError("interpolate_voronoi_sph requires a VoronoiGrid target")
 
     vals, names = particles.value_array(values)
-    Ncell = grid.ncell
+    Ntot = grid.ntotal                # deposit over ALL cells (incl. ghosts)
     if hmin is None:
-        hmin = 0.5 * float(np.median(grid.volume ** (1.0 / 3.0)))
+        hmin = 0.5 * float(np.median(grid.volumes() ** (1.0 / 3.0)))
     hq = np.maximum(particles.h, hmin)
     cand_start, cand_count, cand_cell = voronoi_candidates(
         grid.gen, particles.pos, RADKERNEL * hq)
 
     nthreads = numba.get_num_threads()
     K = vals.shape[1]
-    out_local = np.zeros((nthreads, Ncell, K), dtype=np.float64)
-    norm_local = np.zeros((nthreads, Ncell), dtype=np.float64)
+    out_local = np.zeros((nthreads, Ntot, K), dtype=np.float64)
+    norm_local = np.zeros((nthreads, Ntot), dtype=np.float64)
 
     pos = particles.pos
     _deposit_voronoi_sph(np.ascontiguousarray(pos[:, 0]),
@@ -335,8 +335,10 @@ def interpolate_voronoi_sph(particles, grid, values=None, hmin=None,
                          cand_start, cand_count, cand_cell, float(hmin),
                          out_local, norm_local)
 
-    out = out_local.sum(axis=0)
-    norm = norm_local.sum(axis=0)
+    # fold periodic ghost-cell deposits onto the real (central) cells, then
+    # Shepard-normalize (numerator and denominator both folded first).
+    out = grid.fold_to_central(out_local.sum(axis=0))
+    norm = grid.fold_to_central(norm_local.sum(axis=0))
     if normalise:
         mask = norm > 0.0
         for p in range(K):

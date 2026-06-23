@@ -24,6 +24,8 @@ from .export import (to_cell_table, to_structured_array, to_ramses,
                      RAMSES_HYDRO_VARS, RAMSES_MHD_VARS)
 from .solenoidal import project_solenoidal
 from .kernels import wkernel, cnorm3D
+from .visualise import (visualise, field_image, sample_at_particles,
+                        draw_cells, draw_cells_3d)
 
 __all__ = [
     "Particles", "from_tipsy",
@@ -33,4 +35,6 @@ __all__ = [
     "to_cell_table", "to_structured_array", "to_ramses",
     "RAMSES_HYDRO_VARS", "RAMSES_MHD_VARS", "project_solenoidal",
     "wkernel", "cnorm3D",
+    "visualise", "field_image", "sample_at_particles", "draw_cells",
+    "draw_cells_3d",
 ]

@@ -29,7 +29,7 @@ import numpy as np
 import numba
 from numba import njit, prange
 
-from .kernels import pcum, PCUM_TABLE
+from .kernels import pcum, PCUM_TABLE, gcum3D
 from .targets import (UniformGrid, Projection2D, AMRGrid, VoronoiGrid,
                       voronoi_candidates)
 
@@ -169,73 +169,133 @@ _CUBE_FACES = np.array([
 
 
 @njit(cache=True)
+def _cone_tri(ax, ay, az, bx, by, bz, cx, cy, cz, h):
+    """Kernel integral over the cone from the PARTICLE (at the origin) through the
+    triangle A,B,C (coords RELATIVE to the particle). Always >= 0.
+
+    Building block of the signed-tetrahedralization cell integral:
+     int_cell W = sum over faces (front/back sign) * sum over fan-triangles
+    _cone_tri. The cone integral is int_{Omega in tri} g(R(Omega)) dOmega with
+    g(R) = int_0^R W r^2 dr the radial mass profile and R(Omega) = r0/cos(theta)
+    the distance to the triangle's plane (r0 = perp distance particle->plane).
+
+    Computed ANALYTICALLY (exact at any face size): a triangle entirely beyond 2h
+    (r0 >= 2h) is SATURATED -> closed-form solid angle (Van Oosterom & Strijbos);
+    otherwise the triangle is split into right-triangle wedges about the in-plane
+    foot of the particle and each wedge is the exact `_vertex_integral` (the
+    support-aware Petkova M-integral, verified == the cone integral to ~1e-16),
+    combined per edge by the foot-inside/outside-segment rule and the edge's
+    in-plane orientation. This is the per-TRIANGLE wedge decomposition (always
+    correct); the OLD bug was the per-POLYGON assembly (cond/sign_M across a whole
+    face with the particle outside) — avoided entirely by the signed-tet outer
+    loop. Unlike a fixed quadrature it does not under-resolve a huge cube face
+    whose kernel-active patch is tiny (the coarse-UniformGrid case).
+    """
+    # plane normal n = (B-A) x (C-A); area2 = |n| = 2 * triangle area
+    e1x = bx - ax; e1y = by - ay; e1z = bz - az
+    e2x = cx - ax; e2y = cy - ay; e2z = cz - az
+    nx = e1y*e2z - e1z*e2y
+    ny = e1z*e2x - e1x*e2z
+    nz = e1x*e2y - e1y*e2x
+    area2 = math.sqrt(nx*nx + ny*ny + nz*nz)
+    if area2 < 1e-300:
+        return 0.0
+    invn = 1.0 / area2
+    nhx = nx*invn; nhy = ny*invn; nhz = nz*invn
+    cpl = ax*nhx + ay*nhy + az*nhz       # signed plane offset (particle at origin)
+    r0 = abs(cpl)
+    if r0 < 1e-300:
+        return 0.0
+    if r0 >= 2.0 * h:
+        # saturated: cone = (1/(4 pi)) * solid angle (Van Oosterom & Strijbos)
+        la = math.sqrt(ax*ax + ay*ay + az*az)
+        lb = math.sqrt(bx*bx + by*by + bz*bz)
+        lc = math.sqrt(cx*cx + cy*cy + cz*cz)
+        triple = (ax*(by*cz - bz*cy) + ay*(bz*cx - bx*cz) + az*(bx*cy - by*cx))
+        dab = ax*bx + ay*by + az*bz
+        dac = ax*cx + ay*cy + az*cz
+        dbc = bx*cx + by*cy + bz*cz
+        denom = la*lb*lc + dab*lc + dac*lb + dbc*la
+        omega = 2.0 * math.atan2(abs(triple), denom)
+        return (0.25 / math.pi) * omega
+    # foot of the particle on the triangle plane
+    fx = cpl*nhx; fy = cpl*nhy; fz = cpl*nhz
+    total = 0.0
+    for e in range(3):
+        if e == 0:
+            p1x = ax; p1y = ay; p1z = az; p2x = bx; p2y = by; p2z = bz
+        elif e == 1:
+            p1x = bx; p1y = by; p1z = bz; p2x = cx; p2y = cy; p2z = cz
+        else:
+            p1x = cx; p1y = cy; p1z = cz; p2x = ax; p2y = ay; p2z = az
+        d1x = p1x - fx; d1y = p1y - fy; d1z = p1z - fz
+        d2x = p2x - fx; d2y = p2y - fy; d2z = p2z - fz
+        lx = p2x - p1x; ly = p2y - p1y; lz = p2z - p1z
+        r23 = math.sqrt(lx*lx + ly*ly + lz*lz)
+        if r23 < 1e-300:
+            continue
+        # R_0 = perpendicular distance from the foot to the edge line = |d1 x L|/|L|
+        cx1 = d1y*lz - d1z*ly; cy1 = d1z*lx - d1x*lz; cz1 = d1x*ly - d1y*lx
+        R_0 = math.sqrt(cx1*cx1 + cy1*cy1 + cz1*cz1) / r23
+        r12 = math.sqrt(d1x*d1x + d1y*d1y + d1z*d1z)
+        r13 = math.sqrt(d2x*d2x + d2y*d2y + d2z*d2z)
+        phi1 = math.acos(R_0/r12) if (r12 > 0.0 and R_0 < r12) else 0.0
+        phi2 = math.acos(R_0/r13) if (r13 > 0.0 and R_0 < r13) else 0.0
+        v1 = _vertex_integral(phi1, r0, R_0, h)
+        v2 = _vertex_integral(phi2, r0, R_0, h)
+        # foot-on-edge-line inside the segment -> wedges add; outside -> subtract
+        s1 = math.sqrt(r12*r12 - R_0*R_0) if r12 > R_0 else 0.0
+        s2 = math.sqrt(r13*r13 - R_0*R_0) if r13 > R_0 else 0.0
+        if s1 >= r23 or s2 >= r23:
+            wedge = v1 - v2 if v1 >= v2 else v2 - v1
+        else:
+            wedge = v1 + v2
+        # signed by the edge's in-plane orientation about the foot
+        sx = d1y*d2z - d1z*d2y; sy = d1z*d2x - d1x*d2z; sz = d1x*d2y - d1y*d2x
+        sgn = 1.0 if (sx*nhx + sy*nhy + sz*nhz) > 0.0 else -1.0
+        total += sgn * wedge
+    if total < 0.0:
+        total = -total
+    return total
+
+
+@njit(cache=True)
 def _cube_integral(vx, vy, vz, h, faces):
     """Integral of the unit-normalized kernel over a cube (particle at origin).
 
     vx,vy,vz : (8,) cube vertex coords RELATIVE to the particle.
-    Returns the contained kernel-mass fraction (>= 0).
+    Returns the contained kernel-mass fraction (>= 0). Signed tetrahedralization
+    from the particle: one front/back sign per face, fan-triangulate, sum
+    `_cone_tri` (see its docstring). Mass-conserving for any cube position/size.
     """
-    eps = 1e-9
-    cell_mass = 0.0
+    # interior point = centroid of the 8 vertices (particle-relative), used to
+    # orient each face's outward normal.
+    cgx = 0.0; cgy = 0.0; cgz = 0.0
+    for k in range(8):
+        cgx += vx[k]; cgy += vy[k]; cgz += vz[k]
+    cgx *= 0.125; cgy *= 0.125; cgz *= 0.125
+    total = 0.0
+    nfv = faces.shape[1]
     for f in range(faces.shape[0]):
         i0 = faces[f, 0]; i1 = faces[f, 1]; i2 = faces[f, 2]
-        # plane through first three face vertices
-        v1x = vx[i0]; v1y = vy[i0]; v1z = vz[i0]
-        v2x = vx[i1]; v2y = vy[i1]; v2z = vz[i1]
-        v3x = vx[i2]; v3y = vy[i2]; v3z = vz[i2]
-        A = (v2y-v1y)*(v3z-v1z) - (v3y-v1y)*(v2z-v1z)
-        B = (v2z-v1z)*(v3x-v1x) - (v3z-v1z)*(v2x-v1x)
-        C = (v2x-v1x)*(v3y-v1y) - (v3x-v1x)*(v2y-v1y)
-        D = -(A*v1x + B*v1y + C*v1z)
-        norm = math.sqrt(A*A + B*B + C*C)
-        if norm < eps:
-            continue
-        r0_val = D / norm + eps           # center at origin -> A*0+B*0+C*0+D = D
-        ar0 = abs(r0_val)
-        xp = -r0_val * A / norm
-        yp = -r0_val * B / norm
-        zp = -r0_val * C / norm
-        s2 = (v1x*(v2y*v3z - v2z*v3y) + v1y*(v2z*v3x - v2x*v3z)
-              + v1z*(v2x*v3y - v2y*v3x))
-
-        msum = 0.0
-        nfv = faces.shape[1]
-        for e in range(nfv):
-            ci = faces[f, e]
-            ni = faces[f, (e + 1) % nfv]
-            x2 = vx[ci]; y2 = vy[ci]; z2 = vz[ci]
-            x3 = vx[ni]; y3 = vy[ni]; z3 = vz[ni]
-            lx = x3 - x2; ly = y3 - y2; lz = z3 - z2
-            px = xp - x2; py = yp - y2; pz = zp - z2
-            cxp = py*lz - pz*ly
-            cyp = pz*lx - px*lz
-            czp = px*ly - py*lx
-            cross_mag = math.sqrt(cxp*cxp + cyp*cyp + czp*czp)
-            line_len = math.sqrt(lx*lx + ly*ly + lz*lz)
-            if line_len < eps:
-                continue
-            R_0 = cross_mag / line_len + eps
-            r12 = math.sqrt((xp-x2)**2 + (yp-y2)**2 + (zp-z2)**2)
-            r13 = math.sqrt((xp-x3)**2 + (yp-y3)**2 + (zp-z3)**2)
-            r23 = line_len
-            phi1 = math.acos(R_0/r12) if (r12 != 0.0 and R_0 < r12) else 0.0
-            phi2 = math.acos(R_0/r13) if (r13 != 0.0 and R_0 < r13) else 0.0
-            s1 = (xp*(y2*z3 - z2*y3) + yp*(z2*x3 - x2*z3) + zp*(x2*y3 - y2*x3))
-            sign_M = -1.0 if (s1*s2*r0_val) <= 0.0 else 1.0
-            cond1 = (r12*math.sin(phi1)) + eps >= r23
-            cond2 = (r13*math.sin(phi2)) + eps >= r23
-            if cond1 or cond2:
-                if phi1 >= phi2:
-                    integral = _vertex_integral(phi1, ar0, R_0, h) - _vertex_integral(phi2, ar0, R_0, h)
-                else:
-                    integral = _vertex_integral(phi2, ar0, R_0, h) - _vertex_integral(phi1, ar0, R_0, h)
-            else:
-                integral = _vertex_integral(phi1, ar0, R_0, h) + _vertex_integral(phi2, ar0, R_0, h)
-            msum += sign_M * integral
-        cell_mass += msum
-    if cell_mass < 0.0:
-        cell_mass = 0.0
-    return cell_mass
+        v0x = vx[i0]; v0y = vy[i0]; v0z = vz[i0]
+        ax = vx[i1]-v0x; ay = vy[i1]-v0y; az = vz[i1]-v0z
+        bx = vx[i2]-v0x; by = vy[i2]-v0y; bz = vz[i2]-v0z
+        nx = ay*bz - az*by; ny = az*bx - ax*bz; nz = ax*by - ay*bx
+        # orient outward (point away from the centroid)
+        if nx*(cgx-v0x) + ny*(cgy-v0y) + nz*(cgz-v0z) > 0.0:
+            nx = -nx; ny = -ny; nz = -nz
+        sgn = 1.0 if (v0x*nx + v0y*ny + v0z*nz) > 0.0 else -1.0
+        # fan-triangulate the face polygon from vertex 0
+        for k in range(1, nfv - 1):
+            ka = faces[f, k]; kb = faces[f, k + 1]
+            total += sgn * _cone_tri(
+                v0x, v0y, v0z,
+                vx[ka], vy[ka], vz[ka],
+                vx[kb], vy[kb], vz[kb], h)
+    if total < 0.0:
+        total = 0.0
+    return total
 
 
 @njit(cache=True)
@@ -533,73 +593,47 @@ def interpolate_amr_petkova(particles, grid, values=None):
 # --------------------------------------------------------------------------- #
 
 @njit(cache=True)
-def _voro_cell_integral(px, py, pz, h, c, cf_start, fv_start, fvx, fvy, fvz):
+def _voro_cell_integral(px, py, pz, h, gx, gy, gz, c,
+                        cf_start, fv_start, fvx, fvy, fvz):
     """Integral of the unit-normalized kernel over Voronoi cell `c`, with the
-    particle at (px,py,pz). Returns the contained kernel-mass fraction (>= 0)."""
-    eps = 1e-9
-    cell_mass = 0.0
+    particle at (px,py,pz) and the cell's generator at (gx,gy,gz). Returns the
+    contained kernel-mass fraction (>= 0).
+
+    Signed tetrahedralization from the particle: one front/back sign per face
+    (the generator gives the interior side to orient the outward normal),
+    fan-triangulate each polygonal face, sum `_cone_tri`. This replaces the old
+    foot-point wedge assembly (`_vertex_integral` + cond1/cond2 + sign_M), which
+    failed to telescope for cells straddling the kernel break (h/2h) when the
+    particle is outside the cell — the ~1-1.5% Voronoi conservation error on
+    high-dynamic-range (collapsed-core) meshes. Now machine-precision conserving.
+    """
+    total = 0.0
     f0 = cf_start[c]; f1 = cf_start[c + 1]
     for f in range(f0, f1):
         i0 = fv_start[f]; i1 = fv_start[f + 1]
         nfv = i1 - i0
         if nfv < 3:
             continue
-        # plane through the first three face vertices (particle-relative)
-        v1x = fvx[i0] - px;     v1y = fvy[i0] - py;     v1z = fvz[i0] - pz
-        v2x = fvx[i0+1] - px;   v2y = fvy[i0+1] - py;   v2z = fvz[i0+1] - pz
-        v3x = fvx[i0+2] - px;   v3y = fvy[i0+2] - py;   v3z = fvz[i0+2] - pz
-        A = (v2y-v1y)*(v3z-v1z) - (v3y-v1y)*(v2z-v1z)
-        B = (v2z-v1z)*(v3x-v1x) - (v3z-v1z)*(v2x-v1x)
-        C = (v2x-v1x)*(v3y-v1y) - (v3x-v1x)*(v2y-v1y)
-        D = -(A*v1x + B*v1y + C*v1z)
-        norm = math.sqrt(A*A + B*B + C*C)
-        if norm < eps:
-            continue
-        r0_val = D / norm + eps           # particle at origin -> r0 = D/norm
-        ar0 = abs(r0_val)
-        xp = -r0_val * A / norm
-        yp = -r0_val * B / norm
-        zp = -r0_val * C / norm
-        s2 = (v1x*(v2y*v3z - v2z*v3y) + v1y*(v2z*v3x - v2x*v3z)
-              + v1z*(v2x*v3y - v2y*v3x))
-
-        msum = 0.0
-        for e in range(nfv):
-            ci = i0 + e
-            ni = i0 + (e + 1) % nfv
-            x2 = fvx[ci] - px; y2 = fvy[ci] - py; z2 = fvz[ci] - pz
-            x3 = fvx[ni] - px; y3 = fvy[ni] - py; z3 = fvz[ni] - pz
-            lx = x3 - x2; ly = y3 - y2; lz = z3 - z2
-            ppx = xp - x2; ppy = yp - y2; ppz = zp - z2
-            cxp = ppy*lz - ppz*ly
-            cyp = ppz*lx - ppx*lz
-            czp = ppx*ly - ppy*lx
-            cross_mag = math.sqrt(cxp*cxp + cyp*cyp + czp*czp)
-            line_len = math.sqrt(lx*lx + ly*ly + lz*lz)
-            if line_len < eps:
-                continue
-            R_0 = cross_mag / line_len + eps
-            r12 = math.sqrt((xp-x2)**2 + (yp-y2)**2 + (zp-z2)**2)
-            r13 = math.sqrt((xp-x3)**2 + (yp-y3)**2 + (zp-z3)**2)
-            r23 = line_len
-            phi1 = math.acos(R_0/r12) if (r12 != 0.0 and R_0 < r12) else 0.0
-            phi2 = math.acos(R_0/r13) if (r13 != 0.0 and R_0 < r13) else 0.0
-            s1 = (xp*(y2*z3 - z2*y3) + yp*(z2*x3 - x2*z3) + zp*(x2*y3 - y2*x3))
-            sign_M = -1.0 if (s1*s2*r0_val) <= 0.0 else 1.0
-            cond1 = (r12*math.sin(phi1)) + eps >= r23
-            cond2 = (r13*math.sin(phi2)) + eps >= r23
-            if cond1 or cond2:
-                if phi1 >= phi2:
-                    integral = _vertex_integral(phi1, ar0, R_0, h) - _vertex_integral(phi2, ar0, R_0, h)
-                else:
-                    integral = _vertex_integral(phi2, ar0, R_0, h) - _vertex_integral(phi1, ar0, R_0, h)
-            else:
-                integral = _vertex_integral(phi1, ar0, R_0, h) + _vertex_integral(phi2, ar0, R_0, h)
-            msum += sign_M * integral
-        cell_mass += msum
-    if cell_mass < 0.0:
-        cell_mass = 0.0
-    return cell_mass
+        # first three face vertices (particle-relative) -> face normal
+        v0x = fvx[i0] - px;   v0y = fvy[i0] - py;   v0z = fvz[i0] - pz
+        ax = fvx[i0+1] - px - v0x; ay = fvy[i0+1] - py - v0y; az = fvz[i0+1] - pz - v0z
+        bx = fvx[i0+2] - px - v0x; by = fvy[i0+2] - py - v0y; bz = fvz[i0+2] - pz - v0z
+        nx = ay*bz - az*by; ny = az*bx - ax*bz; nz = ax*by - ay*bx
+        # generator relative to the particle, to orient the outward normal
+        grx = gx - px; gry = gy - py; grz = gz - pz
+        if nx*(grx - v0x) + ny*(gry - v0y) + nz*(grz - v0z) > 0.0:
+            nx = -nx; ny = -ny; nz = -nz
+        sgn = 1.0 if (v0x*nx + v0y*ny + v0z*nz) > 0.0 else -1.0
+        # fan-triangulate the face polygon from vertex 0
+        for k in range(1, nfv - 1):
+            ka = i0 + k; kb = i0 + k + 1
+            total += sgn * _cone_tri(
+                v0x, v0y, v0z,
+                fvx[ka] - px, fvy[ka] - py, fvz[ka] - pz,
+                fvx[kb] - px, fvy[kb] - py, fvz[kb] - pz, h)
+    if total < 0.0:
+        total = 0.0
+    return total
 
 
 @njit(parallel=True, cache=True)
@@ -627,7 +661,8 @@ def _deposit_petkova_voronoi(x, y, z, h, mass, volw, vals,
             reach = kr + gen_rad[c]
             if dx*dx + dy*dy + dz*dz >= reach * reach:
                 continue
-            frac = _voro_cell_integral(xi, yi, zi, hi, c,
+            frac = _voro_cell_integral(xi, yi, zi, hi,
+                                       genx[c], geny[c], genz[c], c,
                                        cf_start, fv_start, fvx, fvy, fvz)
             if frac <= 0.0:
                 continue
@@ -653,20 +688,20 @@ def interpolate_voronoi_petkova(particles, grid, values=None):
         raise TypeError("interpolate_voronoi_petkova requires a VoronoiGrid target")
 
     vals, names = particles.value_array(values)
-    Ncell = grid.ncell
+    Ntot = grid.ntotal                # deposit over ALL cells (incl. ghosts)
     # candidate cells: generator within 2h + max circumradius (necessary overlap
     # condition |particle-gen| < 2h + cell_rad; the integral itself -> 0 for any
     # marginal cell the kernel does not actually reach).
-    Rmax = float(grid.cell_rad.max()) if Ncell else 0.0
+    Rmax = float(grid.cell_rad.max()) if Ntot else 0.0
     radii = 2.0 * np.asarray(particles.h, dtype=np.float64) + Rmax
     cand_start, cand_count, cand_cell = voronoi_candidates(
         grid.gen, particles.pos, radii)
 
     nthreads = numba.get_num_threads()
     K = vals.shape[1]
-    mass_local = np.zeros((nthreads, Ncell), dtype=np.float64)
-    den_local = np.zeros((nthreads, Ncell), dtype=np.float64)
-    num_local = np.zeros((nthreads, Ncell, K), dtype=np.float64)
+    mass_local = np.zeros((nthreads, Ntot), dtype=np.float64)
+    den_local = np.zeros((nthreads, Ntot), dtype=np.float64)
+    num_local = np.zeros((nthreads, Ntot, K), dtype=np.float64)
 
     pos = particles.pos
     _deposit_petkova_voronoi(
@@ -681,10 +716,12 @@ def interpolate_voronoi_petkova(particles, grid, values=None):
         grid.cf_start, grid.fv_start, grid.fvx, grid.fvy, grid.fvz,
         mass_local, den_local, num_local)
 
-    mass = mass_local.sum(axis=0)
-    den = den_local.sum(axis=0)
-    num = num_local.sum(axis=0)
-    vol = grid.volume
+    # fold periodic ghost-cell deposits back onto the real (central) cells
+    mass = grid.fold_to_central(mass_local.sum(axis=0))
+    den = grid.fold_to_central(den_local.sum(axis=0))
+    num = grid.fold_to_central(num_local.sum(axis=0))
+    Ncell = grid.ncell
+    vol = grid.volumes()
     mask = den > 0.0
 
     data = {}

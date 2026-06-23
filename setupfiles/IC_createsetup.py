@@ -1,295 +1,247 @@
-#from IPython import get_ipython
-#def __reset__(): get_ipython().magic('reset -sf')
+"""Create the initial-condition tipsy file (+ aux fields + .param) for one test.
 
-from IC_setup_orzag import setup_orzag
-from IC_setup_areablob import setup_areablob
-from IC_setup_polytrope import setup_polytrope
-from IC_setup_mhdrotor import setup_mhdrotor
-from IC_setup_mhddivtest import setup_mhddivtest
-from IC_setup_mhdblast import setup_mhdblast
-from IC_setup_mhdblast_garcia import setup_mhdblast_garcia
-from IC_setup_mhdpinch_garcia import setup_mhdpinch_garcia
-from IC_setup_kh_garcia import setup_kh_garcia
-#from IC_setup_mhdloop_garcia import setup_mhdloop_garcia
-from IC_setup_sedov import setup_sedov
-from IC_setup_shocktube import setup_shocktube
-from IC_setup_mhdloop import setup_mhdloop
-from IC_setup_mhdloopshear import setup_mhdloopshear
-from IC_setup_cube import setup_cube
-from IC_setup_evrard import setup_evrard
-from IC_setup_accdisk import setup_accdisk
-from IC_setup_alfven import setup_alfven
-from IC_setup_cosmowave import setup_cosmowave
-from IC_setup_taylorgreen import setup_taylorgreen
-from IC_setup_mhdslabcond import setup_mhdslabcond
-from IC_setup_mri import setup_mri
-from IC_setup_mti import setup_mti
-from IC_setup_planet import setup_planet
-from IC_setup_planetcollision import setup_planetcollision
-from IC_setup_wave import setup_wave
-from IC_setup_kh import setup_kh
-from IC_setup_square import setup_square
-from IC_setup_khslab import setup_khslab
-from IC_setup_rt import setup_rt
-from IC_setup_zeldovich import setup_zeldovich
-from IC_setup_blob import setup_blob
-from IC_setup_mhdcollapse import setup_mhdcollapse
-from IC_setup_rotatingcube import setup_rotatingcube
-from IC_setup_gresho import setup_gresho
-from IC_setup_mhdisowave import setup_mhdisowave
-from IC_setup_mhdbalsaravortex import setup_mhdbalsaravortex
-from IC_setup_currentsheet import setup_currentsheet
-from IC_setup_noh import setup_noh
-from IC_setup_isentropicvortex import setup_isentropicvortex
-from IC_setup_coldkeplerian import setup_coldkeplerian
-from IC_writeascii import writeascii,convertfromcodeunits,calculatecosmoMsol
-from matplotlib import pyplot as plot
-from IC_createparamfile import createparamfile
-from mpl_toolkits.mplot3d import Axes3D
-#from mayavi import mlab
-import numpy as np
-from scipy import stats
-import readtipsy as tip
-import timeit
-import pickle
-import sys
+CLI (the runtest.sh contract -- both its lattice/rand and glass invocations):
+
+    python IC_createsetup.py <testsim> <nx> <vm> <entry> <output> [extra ...]
+
+    testsim  test name (run with no arguments to list the choices)
+    nx       resolution (number of elements along x)
+    vm       variable SPH particle masses (0 = equal-mass particles)
+    entry    "0" = lattice, "1" = random, anything else = path to a relaxed
+             glass IC file to rebuild the final IC from
+    output   output name: writes datafiles/<output>.00000 (+ aux, .param)
+    extra    per-test parameters, matched POSITIONALLY to the selected
+             setup's create() signature after (nx, distri, vm, entry);
+             omitted ones keep the create() defaults
+
+Cosmological-unit conventions (for the comoving tests):
+
+    Boxsize = 1 = length unit. Lengths and velocities are comoving;
+    velocities are peculiar from the Hubble flow. The critical density of
+    the Universe in simulation units is 1, so the total mass in the box in
+    simulation units is rho/rho_crit = Omega_matter at z = 0. From the
+    Friedmann equation, H_0^2 = 8 pi rho_crit / 3; hence H_0 =
+    sqrt(8 pi/3) = 2.894405 in simulation units. The velocity unit is
+    (Hubble velocity across the box)/2.894405; the time unit is
+    2.894405/(Hubble parameter).
+
+    Example: Omega0 = 1, box size = 100 Mpc at z=0, h=0.5 (sigma8 and P(k)
+    are not important): mass unit = (rho_crit in Msun/Mpc^3) * (100 Mpc)^3
+    = 6.398e16 Msun; total mass in the box = 1 code mass unit; box size =
+    100 Mpc/(1+z); velocity unit = 1727.47/(1+z) = (50*100/2.894405)/(1+z).
+
+Note: closed-packed distributions are not optimal when sides are equal, as
+this generates small asymmetries due to uneven spacing.
+"""
+
+import argparse
+import importlib
 import inspect
-"""
-Boxsize=1=length unit
+import sys
 
-Lengths and velocities are comoving.
+import numpy as np
 
-Velocities are peculiar from the Hubble flow.
+import readtipsy as tip
+from IC_createparamfile import createparamfile
+from IC_writeascii import convertfromcodeunits, calculatecosmoMsol
 
-The critical density of the Universe in simulation units is 1.
+# Every name maps to IC_setup_<name>.setup_<name>, imported lazily on use.
+SETUPS = [
+    'orzag',
+    'evrard',
+    'polytrope',
+    'planet',
+    'planetcollision',
+    'areablob',
+    'mhdrotor',
+    'mhddivtest',
+    'mhdblast',
+    'mhdblast_garcia',
+    'mhdpinch_garcia',
+    'kh_garcia',
+    'sedov',
+    'shocktube',
+    'mhdloop',
+    'mhdloopshear',
+    'cube',
+    'alfven',
+    'cosmowave',
+    'taylorgreen',
+    'mhdslabcond',
+    'mri',
+    'mti',
+    'kh',
+    'square',
+    'khslab',
+    'rt',
+    'zeldovich',
+    'mhdcollapse',
+    'rotatingcube',
+    'gresho',
+    'mhdisowave',
+    'wave',
+    'mhdbalsaravortex',
+    'currentsheet',
+    'noh',
+    'isentropicvortex',
+    'coldkeplerian',
+    'accdisk',
+    'blob',
+]
 
 
-The total mass in the box in simulation units is rho/rho_crit = Omega_{matter} at z = 0.
-From the Friedmann equation, H_0^2 = 8 pi rho_crit / 3; hence, H_0 = sqrt(8 pi/3) = 2.894405 in simulation units.
-The velocity unit is gotten from (Hubble velocity across the box/2.894405).
-The time unit is 2.894405/(Hubble parameter).
-
-Examples
-
-Omega0 = 1 Box size = 100mpc at z=0 h=0.5
-
-(just in case you are wondering: sigma8 and P(k) are not important)
-
-mass unit = (rho_crit in Msun/Mpc^3) times (100 Mpc)^3 = 6.398e16 solar masses
-
-Total mass in the box = 1 code mass unit
-
-box size = 100Mpc/(1+z)
-
-Velocity unit= 1727.47/(1+z) = (50 100 /2.894405)/(1+z)
-
-"""
-
-"""
- Closed packed distributions are not optimal when sides are equal as this will generate
-small asymmetries due to not even spacing everywhere.
-"""
-
-#COSMO SETTINGS
-h0=1.0
-z=127
-ascale=1./(1.+z)
-#ascale = 0.0
-
-glasssetup = 0
-
-
-
-# Dictionary mapping simplified names to setup functions
-setup_functions = {
-    'orzag': setup_orzag,
-    'evrard': setup_evrard,
-    'polytrope': setup_polytrope,
-    'planet': setup_planet,
-    'planetcollision': setup_planetcollision,
-    'areablob': setup_areablob,
-    'mhdrotor': setup_mhdrotor,
-    'mhddivtest': setup_mhddivtest,
-    'mhdblast': setup_mhdblast,
-    'mhdblast_garcia': setup_mhdblast_garcia,
-    'mhdpinch_garcia': setup_mhdpinch_garcia,
-    'kh_garcia': setup_kh_garcia,
-    'sedov': setup_sedov,
-    'shocktube': setup_shocktube,
-    'mhdloop': setup_mhdloop,
-    'mhdloopshear': setup_mhdloopshear,
-    'cube': setup_cube,
-    'alfven': setup_alfven,
-    'cosmowave': setup_cosmowave,
-    'taylorgreen': setup_taylorgreen,
-    'mhdslabcond': setup_mhdslabcond,
-    'mri': setup_mri,
-    'mti': setup_mti,
-    'kh': setup_kh,
-    'square': setup_square,
-    'khslab': setup_khslab,
-    'rt': setup_rt,
-    'zeldovich': setup_zeldovich,
-    'mhdcollapse': setup_mhdcollapse,
-    'rotatingcube': setup_rotatingcube,
-    'gresho': setup_gresho,
-    'mhdisowave': setup_mhdisowave,
-    'wave': setup_wave,
-    'mhdbalsaravortex': setup_mhdbalsaravortex,
-    'currentsheet': setup_currentsheet,
-    'noh': setup_noh,
-    'isentropicvortex': setup_isentropicvortex,
-    'coldkeplerian': setup_coldkeplerian,
-    'accdisk': setup_accdisk,
-    'blob': setup_blob,
-}
-
-print("HELLO",sys.argv)
-
-# If sys.argv[0] is not given, list all available options
-if len(sys.argv) < 2:
+def list_setups():
     print("Available options:")
-    for option in setup_functions:
+    for option in SETUPS:
         print(f"- {option}")
-    sys.exit(0)
-    
-# Determine the setup function based on setup_case
-setup_case = sys.argv[1]
-
-if setup_case in setup_functions:
-    # Exact match wins
-    sim = setup_functions[setup_case]()
-else:
-    # Default case if no match is found
-    raise ValueError(f"Unknown setup_case: {setup_case}")
-
-n=float(sys.argv[2])
-vm=float(sys.argv[3])
-fileinput = sys.argv[4] if len(sys.argv) > 4 else ""
-distri = 2 if fileinput else input("Enter wanted distribution (0: lattice 1: random): ")
-distri = 0 if fileinput == "0" else 1 if fileinput == "1" else distri
-
-print("distri: ",distri,fileinput)
-
-distribution_name = "lattice" if distri == 0 else "rand" if distri == 1 else "glass" if distri == 2 else None
-
-if distribution_name is None:
-    print("Invalid distribution choice. Exiting.")
-    sys.exit()
-
-default_output = f"{setup_case}_{n}_{distribution_name}"
-fileoutput = sys.argv[5] if len(sys.argv) > 5 else input(f"Enter fileoutput (default: {default_output}): ") or default_output
 
 
-print("sim",sim,setup_case)
-# Retrieve the signature of the create function
-sig = inspect.signature(sim.create)
-## Standard arguments for all IC
-standard_args = {
-    'nx': n,
-    'distri': int(distri), 
-    'vm': vm,
-    'entry': fileinput
-}
-# Determine extra arguments by filtering out standard arguments
-extra_args = {param.name: param.default for param in sig.parameters.values() if param.name not in standard_args}
-print("Default value of extra arguments in ", setup_case, "  ", extra_args)
-# Update extra_args with values from sys.argv, if provided
-argv_index = 6  # Starting index in sys.argv for extra arguments
-for arg_name in extra_args.keys():
-    if argv_index < len(sys.argv):  # Check if there are enough arguments provided
-        # Convert the argument to the correct type (int, float, str, etc.)
-        # Here we assume all extra arguments are floats; you may need to adjust this based on your needs
-        extra_args[arg_name] = float(sys.argv[argv_index])
-    argv_index += 1  # Move to the next argument in sys.argv
-all_args = {**standard_args, **extra_args}
-print("Your setup parameter list: ", setup_case, "  ", all_args)
-## Generate gas IC
-sim.create(**all_args)
-## Generate dark matter IC
-#orz.create_dark(**all_args)
-## Generate star IC
-#orz.create_star(**all_args)
+def load_setup(setup_case):
+    module = importlib.import_module(f"IC_setup_{setup_case}")
+    return getattr(module, f"setup_{setup_case}")()
 
 
-
-## File name
-file_string=fileoutput
-
-
-zero=[0.0]*len(sim.x);
-if setup_case != 'mti' and setup_case != 'blob':
-    sim.metals=zero
-sim.pot=zero
-sim.Bpsi=zero
-## (data,kpc,msol,ifnottemp,phystocodevel,phystocodeB)
-if setup_case == 'mhdcollapse':
-    sim=convertfromcodeunits(sim,0.001,1000,1,1,1)
-elif setup_case == 'areablob':
-    sim=convertfromcodeunits(sim,1,1,0,0,0)
-elif setup_case == 'planet' or setup_case == 'planetcollision':
-    sim=convertfromcodeunits(sim,1,1,0,0,0)
-else:
-    sim=convertfromcodeunits(sim,sim.dkpcunit,sim.dmsolunit,1,0,0)
-
-#COSMO
-if(sim.cosmo==1):
-    ascale=sim.a
-    sim.dmsolunit=calculatecosmoMsol(h0,sim.dkpcunit)
-    sim=convertfromcodeunits(sim,sim.dkpcunit,sim.dmsolunit,1,0,0)
+def resolve_distribution(entry):
+    """entry "0"/"1" select lattice/random; any other value is a glass IC file."""
+    if entry == "0":
+        return 0, "lattice"
+    if entry == "1":
+        return 1, "rand"
+    return 2, "glass"
 
 
-# Data Initialization
-npart = len(sim.x)
-tgdata = np.column_stack((sim.mass, sim.x, sim.y, sim.z, sim.vx, sim.vy, sim.vz, sim.rho, sim.u, sim.h, sim.metals, sim.pot))
-B = np.column_stack((sim.Bx, sim.By, sim.Bz))
+def coerce_extra(value, default):
+    """Coerce a CLI extra to its create() parameter type.
+
+    String-valued parameters (planet preset names, planetcollision
+    target/impactor) pass through; everything else follows the historical
+    all-floats convention. A non-numeric value for a None-default parameter
+    also passes through as a string.
+    """
+    if isinstance(default, str):
+        return value
+    try:
+        return float(value)
+    except ValueError:
+        return value
 
 
-# Tipsy Header(None of the tests include DM or stars atm)
-data_header=np.array([npart, 3, npart, 0, 0, 0])
+def main():
+    if len(sys.argv) < 2:
+        list_setups()
+        sys.exit(0)
 
-if(sim.cosmo==1):
-    a2=np.geomspace(ascale,1,num=300)
-    z2=1/a2-1
-    np.savetxt("mhdcosmodivteststd.red", z2,fmt='%.4f')
-    time=np.array([ascale])
-else:
-    time=np.array([0.0])
+    parser = argparse.ArgumentParser(
+        description="Create the IC tipsy file (+ aux, .param) for one test case.",
+        usage="%(prog)s testsim nx vm entry output [extra ...]",
+        epilog=__doc__.split("Cosmological")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("testsim", help="test name (no arguments lists the choices)")
+    parser.add_argument("nx", type=float, help="resolution (elements along x)")
+    parser.add_argument("vm", type=float, help="variable particle masses (0 = equal mass)")
+    parser.add_argument("entry", help='"0" lattice, "1" random, else a glass IC file')
+    parser.add_argument("output", help="written as datafiles/<output>.00000")
+    # The per-test extras are sliced off BEFORE argparse so values like
+    # "-1e-4" (negative scientific notation, which argparse would reject as
+    # an unknown option) and arbitrary preset strings survive untouched.
+    args = parser.parse_args(sys.argv[1:6])
+    extras = sys.argv[6:]
+
+    if args.testsim not in SETUPS:
+        list_setups()
+        sys.exit(f"Unknown setup_case: {args.testsim}")
+
+    sim = load_setup(args.testsim)
+    distri, distribution_name = resolve_distribution(args.entry)
+    glasssetup = 1 if distri == 1 else 0
+
+    standard_args = {
+        'nx': args.nx,
+        'distri': distri,
+        'vm': args.vm,
+        'entry': args.entry,
+    }
+    sig = inspect.signature(sim.create)
+    extra_args = {param.name: param.default for param in sig.parameters.values()
+                  if param.name not in standard_args}
+    for name, value in zip(extra_args, extras):
+        extra_args[name] = coerce_extra(value, extra_args[name])
+    all_args = {**standard_args, **extra_args}
+    print(f"IC_createsetup[{args.testsim}]: {distribution_name} IC, parameters {all_args}")
+
+    ## Generate gas IC
+    sim.create(**all_args)
+
+    zero = [0.0] * len(sim.x)
+    if args.testsim != 'mti' and args.testsim != 'blob':
+        sim.metals = zero
+    sim.pot = zero
+    sim.Bpsi = zero
+    ## (data,kpc,msol,ifnottemp,phystocodevel,phystocodeB)
+    if args.testsim == 'mhdcollapse':
+        sim = convertfromcodeunits(sim, 0.001, 1000, 1, 1, 1)
+    elif args.testsim in ('areablob', 'planet', 'planetcollision'):
+        sim = convertfromcodeunits(sim, 1, 1, 0, 0, 0)
+    else:
+        sim = convertfromcodeunits(sim, sim.dkpcunit, sim.dmsolunit, 1, 0, 0)
+
+    # COSMO: comoving run -- recompute the mass unit from the box size and
+    # start the snapshot clock at the IC scale factor.
+    if sim.cosmo == 1:
+        h0 = 1.0
+        ascale = sim.a
+        sim.dmsolunit = calculatecosmoMsol(h0, sim.dkpcunit)
+        sim = convertfromcodeunits(sim, sim.dkpcunit, sim.dmsolunit, 1, 0, 0)
+
+    npart = len(sim.x)
+    tgdata = np.column_stack((sim.mass, sim.x, sim.y, sim.z,
+                              sim.vx, sim.vy, sim.vz,
+                              sim.rho, sim.u, sim.h, sim.metals, sim.pot))
+    B = np.column_stack((sim.Bx, sim.By, sim.Bz))
+
+    # Tipsy header (none of the tests include DM or stars at this point)
+    data_header = np.array([npart, 3, npart, 0, 0, 0])
+
+    if sim.cosmo == 1:
+        a2 = np.geomspace(ascale, 1, num=300)
+        z2 = 1 / a2 - 1
+        np.savetxt("mhdcosmodivteststd.red", z2, fmt='%.4f')
+        time = np.array([ascale])
+    else:
+        time = np.array([0.0])
+
+    tddata = []
+    tsdata = []
+
+    # Generate dark-matter / star (e.g. central sink/BH) particles if the setup
+    # defines them. Each hook returns (data_array, nparticles); the per-test logic
+    # lives in the IC_setup_*.py files (keeps this driver generic).
+    if glasssetup == 0 and hasattr(sim, 'create_dark'):
+        tddata, ndark = sim.create_dark(tgdata)
+        data_header[3] = data_header[3] + ndark
+        data_header[0] = data_header[0] + ndark
+
+    if glasssetup == 0 and hasattr(sim, 'create_star'):
+        tsdata, nstar = sim.create_star(tgdata)
+        data_header[4] = data_header[4] + nstar
+        data_header[0] = data_header[0] + nstar
+
+    myoutput = "datafiles/" + args.output + ".00000"
+    tip.writetipsy(tgdata, tddata, tsdata, myoutput, data_header, time)
+    tip.writealltipsyaux(B, myoutput)
+
+    if args.testsim == 'planetcollision':
+        tip.writealltipsyauxB(sim.Xg, myoutput, sim.labels)
+
+    if args.testsim == 'planet':
+        for i in range(1, 6):
+            tip.writetipsyaux(getattr(sim, f"Mat{i}"), f"Material{i}", myoutput)
+
+    createparamfile(args.output, sim, glasssetup, args.testsim)
+    print('time', time)
+    print("created file: ", args.output)
 
 
-tddata=[]
-tsdata=[]
-if distri == 1:
-    glasssetup = 1
-
-# Generate dark-matter / star (e.g. central sink/BH) particles if the setup
-# defines them. Each hook returns (data_array, nparticles); the per-test logic
-# lives in the IC_setup_*.py files (keeps this driver generic).
-if glasssetup == 0 and hasattr(sim, 'create_dark'):
-    tddata, ndark = sim.create_dark(tgdata)
-    data_header[3]=data_header[3]+ndark
-    data_header[0]=data_header[0]+ndark
-
-if glasssetup == 0 and hasattr(sim, 'create_star'):
-    tsdata, nstar = sim.create_star(tgdata)
-    data_header[4]=data_header[4]+nstar
-    data_header[0]=data_header[0]+nstar
-
-myoutput = "datafiles/" + file_string + ".00000"
-tip.writetipsy(tgdata,tddata,tsdata,myoutput,data_header,time)
-tip.writealltipsyaux(B,myoutput)
-
-if setup_case == 'planetcollision':
-    tip.writealltipsyauxB(sim.Xg, myoutput, sim.labels)
-
-if setup_case == 'planet':
-    tip.writetipsyaux(sim.Mat1,"Material1",myoutput)
-    tip.writetipsyaux(sim.Mat2,"Material2",myoutput)
-    tip.writetipsyaux(sim.Mat3,"Material3",myoutput)
-    tip.writetipsyaux(sim.Mat4,"Material4",myoutput)
-    tip.writetipsyaux(sim.Mat5,"Material5",myoutput)
-
-createparamfile(file_string,sim,glasssetup,setup_case)
-print('time', time)
-print("created file: ",file_string)
-
+if __name__ == "__main__":
+    main()

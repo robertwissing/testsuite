@@ -10,7 +10,7 @@ TARGET geometry with a chosen METHOD, and serialize the result.
 Run with NO positional arguments to be prompted interactively for everything.
 
 TARGETS (--grid):   uniform | amr | voronoi | projection
-METHODS (--method): sph (fast, approximate) | petkova (exact, mass-conserving)
+METHODS (--method): petkova (exact, mass-conserving; default) | sph (fast, approximate)
 OUTPUT (--output-format): npz | hdf5 | ramses | cell-table | native
 
 Examples
@@ -69,7 +69,7 @@ def interactive(args):
     args.input = _ask("Input tipsy snapshot")
     args.grid = _ask("Grid / target geometry", default="uniform",
                      choices=["uniform", "amr", "voronoi", "projection"])
-    args.method = _ask("Interpolation method", default="sph",
+    args.method = _ask("Interpolation method", default="petkova",
                        choices=["sph", "petkova"])
     args.fields = _ask("Fields to interpolate (comma list)", default="rho")
 
@@ -101,6 +101,15 @@ def interactive(args):
                               choices=["npz", "hdf5", "ramses", "cell-table",
                                        "native"])
     args.output = _ask("Output file")
+    if _ask("Write a SPH-vs-grid diagnostic figure?", default="y",
+            choices=["y", "n"]) == "y":
+        args.visualise = _ask("  figure path", default=os.path.splitext(
+            args.output)[0] + "_visualise.pdf")
+        args.visualise_field = _ask("  field to visualise",
+                                    default=args.fields.split(",")[0].strip())
+        if args.grid != "projection":
+            args.visualise_axes = _ask("  slice plane", default="xy",
+                                       choices=["xy", "xz", "yz"])
     print("-" * 64)
     return args
 
@@ -151,11 +160,19 @@ def build_target(args, p):
 
     if args.grid == "voronoi":
         half = 0.5 * np.asarray(box).reshape(3)
-        pad = args.voronoi_pad
-        bounds = [[-half[a] - pad, half[a] + pad] for a in range(3)]
+        # Periodic box -> bounds ARE the period (ghost images give exact periodic
+        # cells, Sum volume = box volume); non-periodic -> pad past the box.
+        vper = p.periodic if any(np.atleast_1d(p.periodic)) else False
+        if vper:
+            bounds = [[-half[a], half[a]] for a in range(3)]
+            ptag = " (periodic, ghost images)"
+        else:
+            pad = args.voronoi_pad
+            bounds = [[-half[a] - pad, half[a] + pad] for a in range(3)]
+            ptag = ""
         if args.voronoi_source == "particles":
-            print(f"  target: VoronoiGrid from {p.n} particles")
-            return VoronoiGrid.from_particles(p, bounds=bounds)
+            print(f"  target: VoronoiGrid from {p.n} particles{ptag}")
+            return VoronoiGrid.from_particles(p, bounds=bounds, periodic=vper)
         if args.voronoi_source == "grid":
             nx = args.npx
             axes = [(-half[a] + (np.arange(nx) + 0.5) * (2.0 * half[a] / nx))
@@ -163,22 +180,21 @@ def build_target(args, p):
             X, Y, Z = np.meshgrid(*axes, indexing="ij")
             pts = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
             print(f"  target: VoronoiGrid from a {nx}^3 = {nx**3} regular "
-                  "lattice (cubic cells)")
-            return VoronoiGrid.from_points(pts, bounds=bounds, periodic=False)
+                  f"lattice (cubic cells){ptag}")
+            return VoronoiGrid.from_points(pts, bounds=bounds, periodic=vper)
         ncells = args.npx ** 3                     # npx per-axis-equivalent count
         rng = np.random.default_rng(args.seed)
         if args.voronoi_source == "random":
             pts = rng.uniform(-half + 1e-9, half - 1e-9, size=(ncells, 3))
             print(f"  target: VoronoiGrid from {ncells} (={args.npx}^3) random "
-                  "generators")
+                  f"generators{ptag}")
         else:  # subsample
             n = min(ncells, p.n)
             idx = rng.choice(p.n, size=n, replace=False)
             pts = p.pos[idx]
             print(f"  target: VoronoiGrid from {n} subsampled particles "
-                  f"(target {args.npx}^3={ncells})")
-        return VoronoiGrid.from_points(pts, bounds=bounds,
-                                       periodic=False)
+                  f"(target {args.npx}^3={ncells}){ptag}")
+        return VoronoiGrid.from_points(pts, bounds=bounds, periodic=vper)
 
     if args.grid == "projection":
         a1, a2 = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}[args.axes]
@@ -310,8 +326,8 @@ def build_parser():
 
     pa.add_argument("--grid", choices=["uniform", "amr", "voronoi", "projection"],
                     default="uniform", help="target geometry")
-    pa.add_argument("--method", choices=["sph", "petkova"], default="sph",
-                    help="sph=fast/approx, petkova=exact/mass-conserving")
+    pa.add_argument("--method", choices=["sph", "petkova"], default="petkova",
+                    help="petkova=exact/mass-conserving (default), sph=fast/approx")
     pa.add_argument("--fields", default="rho",
                     help="comma list of fields to interpolate (rho,Bmag,vx,...)")
     pa.add_argument("--output-format",
@@ -362,6 +378,19 @@ def build_parser():
                     help="pad cell domain past the box (keeps boundary kernels in)")
     pa.add_argument("--seed", type=int, default=0, help="RNG seed (voronoi)")
 
+    # visualisation
+    pa.add_argument("--visualise", "--visualize", dest="visualise", nargs="?",
+                    const="", default=None,
+                    help="write a diagnostic figure comparing the SPH particle "
+                         "field to the interpolated grid (geometry-aware slice, "
+                         "density PDFs, per-particle grid-vs-SPH scatter, mass "
+                         "conservation). Optionally pass a path; default is "
+                         "<output>_visualise.pdf.")
+    pa.add_argument("--visualise-field", default=None,
+                    help="which field to visualise (default: first of --fields)")
+    pa.add_argument("--visualise-axes", choices=["xy", "xz", "yz"], default="xy",
+                    help="slice/projection plane for --visualise (3D targets)")
+
     # ramses
     pa.add_argument("--hydro-fields", default=None,
                     help="ordered RAMSES hydro vars (default rho,vx,vy,vz,P "
@@ -400,6 +429,15 @@ def main(argv=None):
     report_mass(res, p)
 
     write_output(res, args.output, args.output_format, args, p)
+
+    if args.visualise is not None:
+        from sph_interp import visualise
+        vfield = args.visualise_field or fields[0]
+        vpath = args.visualise or os.path.splitext(args.output)[0] + "_visualise.pdf"
+        plane = {"xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}[args.visualise_axes]
+        print(f"  visualising field '{vfield}' ({args.visualise_axes}) ...")
+        visualise(res, p, field=vfield, out=vpath, plane=plane)
+
     print("done.")
 
 

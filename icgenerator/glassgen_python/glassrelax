@@ -1,0 +1,51 @@
+#!/bin/bash
+# glassrelax: glass-relax a tipsy pre-IC with the Python icgenerator.
+#
+# usage: glassrelax <pre-IC.NNNNN> [glassgen.cli options...]
+#
+#   glassrelax sedov32_randselect1.0beta0.0ublast10.0.00000
+#   glassrelax pre.00000 --table dens_xdr --direction r_sph -n 2000 -oi 400
+#
+# Defaults derived from the input name (overridden by passing the flag
+# yourself):
+#   --param <input minus .NNNNN>.param   (when that file exists)
+#   -o      <input minus .NNNNN>_glass   (final output: ..._glass_IC)
+# Everything else (-s, -n, -oi, --table, --direction, --flavour, --rhopow,
+# --icr0, ...) is passed straight to glassgen.cli; run with --help to list.
+set -euo pipefail
+
+pkgroot=$(cd "$(dirname "$0")" && pwd)
+
+if [[ $# -lt 1 || $1 == -h || $1 == --help ]]; then
+    echo "usage: $(basename "$0") <pre-IC tipsy file> [options]"
+    echo
+    PYTHONPATH=$pkgroot python -m glassgen.cli --help
+    exit 0
+fi
+
+infile=$1; shift
+[[ -f $infile ]] || { echo "glassrelax: no such file: $infile" >&2; exit 1; }
+
+base=$infile
+[[ $infile =~ ^(.*)\.[0-9]+$ ]] && base=${BASH_REMATCH[1]}
+
+args=("$@")
+have_out=0 have_box=0
+for a in "${args[@]}"; do
+    case $a in
+        -o) have_out=1 ;;
+        --param|--param=*|--box|--open) have_box=1 ;;
+    esac
+done
+((have_out)) || args+=(-o "${base}_glass")
+if ((!have_box)); then
+    if [[ -f $base.param ]]; then
+        args+=(--param "$base.param")
+    else
+        echo "glassrelax: no $base.param found - pass --param, --box LX LY LZ, or --open" >&2
+        exit 1
+    fi
+fi
+
+exec env PYTHONPATH=$pkgroot${PYTHONPATH:+:$PYTHONPATH} \
+    python -m glassgen.cli -I "$infile" "${args[@]}"
