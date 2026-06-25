@@ -27,6 +27,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import readtipsy as tip
+from glassgen.kernels import W0, wzero_wc2
 from glassgen.neighbors import NeighborList
 from glassgen.sph_core import density_loop
 from benchmark import read_param, box_from_param, target_from_param
@@ -52,7 +53,7 @@ def load(path, box, nsmooth):
     nb = NeighborList(box, nsmooth, margin=8, build_transpose=False)
     idx, h, _, _ = nb.update(pos)
     rho = np.empty(len(pos))
-    density_loop(pos, mass, h, idx, box, True, rho)
+    density_loop(pos, mass, h, idx, box, True, rho, W0 * wzero_wc2(nsmooth))
     return pos, rho
 
 

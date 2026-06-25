@@ -21,29 +21,8 @@ _SETUPFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, _SETUPFILES)
 
 from .density import MAPPINGS, CallableDensity, TableDensity
+from .params import box_from_param, density_from_param, read_param
 from .relax import relax
-
-
-def read_box_from_param(path):
-    period = {'dPeriod': None, 'dxPeriod': None, 'dyPeriod': None,
-              'dzPeriod': None}
-    bperiodic = 1
-    with open(path) as f:
-        for line in f:
-            line = line.split('#')[0]
-            if '=' not in line:
-                continue
-            key, val = (s.strip() for s in line.split('=', 1))
-            if key in period:
-                period[key] = float(val)
-            elif key == 'bPeriodic':
-                bperiodic = int(val)
-    if not bperiodic:
-        return None
-    d = period['dPeriod'] or 1.0
-    return np.array([period['dxPeriod'] or d,
-                     period['dyPeriod'] or d,
-                     period['dzPeriod'] or d])
 
 
 def write_denserr_plot(out, pos, mass, h, rho, density, box, nsmooth,
@@ -124,36 +103,41 @@ def main(argv=None):
     ap.add_argument('--nsmoothmin', type=int, default=32,
                     help='floor on density-based h: never gather fewer than '
                          '~nsmoothmin real neighbours (measured/target only)')
-    ap.add_argument('--progressive', action='store_true',
-                    help='multi-resolution relaxation: relax a coarse set '
-                         '(nx_coarse) to capture the large-scale field, split '
-                         'up to full resolution, then a fine confined relax')
+    ap.add_argument('--no-progressive', dest='progressive',
+                    action='store_false',
+                    help='disable the DEFAULT multi-resolution path and run a '
+                         'single full-resolution relax. The default coarsens '
+                         'the input to the auto density-chosen coarse count, '
+                         'relaxes it, then cascades (x2 splits + confined heals) '
+                         'back up to full res.')
     ap.add_argument('--coarse-target', dest='coarse_target', default='auto',
-                    help='--progressive coarse particle count: "auto" picks '
+                    help='progressive coarse particle count: "auto" picks '
                          'N_coarse_min from the target density (resolves the '
                          'steepest feature); an integer forces a coarse count. '
                          'The merge factor is floor_pow2(N_full/target); '
                          'factor 1 => no merge / direct relax (default auto)')
-    ap.add_argument('--alpha', type=float, default=2.0,
+    ap.add_argument('--alpha', type=float, default=4.0,
                     help='resolution tolerance for the auto coarse count '
-                         '(default 2.0, calibrated on mhdcollapse 360:1)')
-    ap.add_argument('--legacy-coarse', dest='legacy_coarse',
-                    action='store_true',
-                    help='use the old fixed-nx_coarse single-jump coarse->fine '
-                         'instead of the density-auto merge cascade')
-    ap.add_argument('--nx-coarse', dest='nx_coarse', type=int, default=64,
-                    help='coarse resolution for the LEGACY --legacy-coarse path; '
-                         'coarse stage skipped when nx_full <= nx_coarse')
+                         '(default 4.0)')
     ap.add_argument('--nx-full', dest='nx_full', type=int, default=0,
-                    help='full target resolution for --progressive '
-                         '(default: round(N**(1/3)) from the input)')
-    ap.add_argument('--no-fine-confine', dest='fine_confine',
-                    action='store_false',
-                    help='do not cap fine-phase moves at one h (test only)')
-    ap.add_argument('--fine-reanneal', dest='fine_reanneal',
-                    action='store_true',
-                    help='keep the ICRLOOP0 re-anneal loop in the fine phase '
-                         '(default off for --progressive)')
+                    help='full target resolution (default: round(N**(1/3)) '
+                         'from the input)')
+    ap.add_argument('--inter-iter', dest='inter_iter', type=int, default=10,
+                    help='icgen iterations after each intermediate x2 split in '
+                         'the progressive cascade (default 10)')
+    ap.add_argument('--momentum', type=float, default=0.5,
+                    help='heavy-ball coefficient on the post-split confined '
+                         'stages (default 0.5; 0 = off)')
+    ap.add_argument('--icr0-stop', dest='icr0_stop', type=float, default=3e-3,
+                    help='median-smoothed icr0 stop (max step as a fraction of '
+                         'h) - the quality dial: 3e-3 fast/good, ~1e-3 tight. '
+                         '0 = off (then -n / --polish-iter ends the run)')
+    ap.add_argument('--polish-iter', dest='polish_iter', type=int, default=0,
+                    help='fixed polish-iteration budget on the fine stage '
+                         '(0 = off; composes with --icr0-stop)')
+    ap.add_argument('--no-self-bias', dest='self_bias', action='store_false',
+                    help='disable the Wendland C2 self-density bias correction '
+                         '(Wzero10); density then uses the bare W0 self term')
     ap.add_argument('--plot', action='store_true',
                     help='after relaxation, write ${out}_denserr.png: the '
                          'density-error |1-rho/rho0| and residual-force |icvel| '
@@ -173,18 +157,24 @@ def main(argv=None):
     pos = gas[:, 1:4].astype(np.float64)
     mass = gas[:, 0].astype(np.float64)
 
+    param_dict = read_param(args.param) if args.param else None
     if args.open:
         box = None
     elif args.box:
         box = np.array(args.box)
     else:
-        box = read_box_from_param(args.param)
+        box = box_from_param(param_dict)
 
     if args.table:
         density = TableDensity.from_xdr(args.table, mapping=args.direction)
+    elif param_dict is not None:
+        # read the density profile straight from the .param (profiles 1/2/3),
+        # exactly as the C gdicgen does - no density table needed for these.
+        density = density_from_param(param_dict)
     else:
+        # --box without a .param: uniform target (total gas mass / box volume)
         if box is None:
-            sys.exit('uniform density needs a box (--param or --box)')
+            sys.exit('uniform density needs a box (--box)')
         rho_mean = mass.sum() / np.prod(box)
         density = CallableDensity(lambda p, r=rho_mean: np.full(len(p), r))
 
@@ -199,35 +189,23 @@ def main(argv=None):
     if args.progressive:
         if box is None:
             sys.exit('--progressive needs a periodic box (--param or --box)')
-        from .progressive import relax_progressive, default_levels
+        from .progressive import relax_progressive
         nx_full = args.nx_full or int(round(len(gas) ** (1.0 / 3.0)))
-        if args.legacy_coarse:
-            # LEGACY: big single-jump coarse->fine at a fixed nx_coarse
-            levels = default_levels(
-                nx_full, args.nx_coarse,
-                coarse_kw=dict(max_iter=args.max_iter),
-                fine_kw=dict(confine=args.fine_confine,
-                             reanneal=args.fine_reanneal,
-                             max_iter=args.max_iter))
-            res = relax_progressive(
-                pos, mass, density, box, nx_full=nx_full,
-                nx_coarse=args.nx_coarse, levels=levels, nsmooth=args.nsmooth,
-                flavour=args.flavour, rhopow=args.rhopow, icr0rate=args.icr0rate,
-                margin=args.margin, one_sided=args.one_sided, hmode=args.hmode,
-                nsmoothmin=args.nsmoothmin, verbose=True)
-        else:
-            # DEFAULT: merge the input down to the density-chosen coarse count
-            # (auto N_coarse_min, alpha), relax, cascade back to the input
-            # count 1:1. --coarse-target overrides 'auto' with a count.
-            ct = args.coarse_target
-            ct = ct if ct == 'auto' else int(ct)
-            res = relax_progressive(
-                pos, mass, density, box, nx_full=nx_full, coarse_seed='merge',
-                coarse_target=ct, alpha=args.alpha, nsmooth=args.nsmooth,
-                max_iter=args.max_iter, flavour=args.flavour,
-                rhopow=args.rhopow, icr0rate=args.icr0rate, margin=args.margin,
-                one_sided=args.one_sided, hmode=args.hmode,
-                nsmoothmin=args.nsmoothmin, verbose=True)
+        # merge the input down to the density-chosen coarse count (auto
+        # N_coarse_min, alpha), relax, then cascade (x2 splits + confined heals,
+        # momentum on the post-split stages) back to the input count 1:1.
+        # --coarse-target overrides 'auto' with an explicit count.
+        ct = args.coarse_target
+        ct = ct if ct == 'auto' else int(ct)
+        res = relax_progressive(
+            pos, mass, density, box, nx_full=nx_full, coarse_seed='merge',
+            coarse_target=ct, alpha=args.alpha, inter_iter=args.inter_iter,
+            nsmooth=args.nsmooth, max_iter=args.max_iter,
+            momentum=args.momentum, icr0_stop=args.icr0_stop,
+            polish_iter=args.polish_iter, cap=2.0, start_icr0=2.0,
+            flavour=args.flavour, rhopow=args.rhopow, icr0rate=args.icr0rate,
+            margin=args.margin, one_sided=args.one_sided, hmode=args.hmode,
+            nsmoothmin=args.nsmoothmin, self_bias=args.self_bias, verbose=True)
         nf = len(res.pos)
         mf = mass.sum() / nf  # equal-mass glass
         g = np.zeros((nf, 12), dtype=gas.dtype)
@@ -240,9 +218,8 @@ def main(argv=None):
         hdr[2] = nf
         tip.writetipsy(g, dark, star, f'{args.out}_IC', hdr, time)
         err = np.abs(1.0 - res.rho / density.rho0(res.pos))
-        print(f'done (progressive nx_coarse={args.nx_coarse}->nx_full='
-              f'{nx_full}): final N={nf}, mean|1-rho/rho0|={err.mean():.3e}, '
-              f'wrote {args.out}_IC')
+        print(f'done (progressive -> nx_full={nx_full}): final N={nf}, '
+              f'mean|1-rho/rho0|={err.mean():.3e}, wrote {args.out}_IC')
         for l in res.levels:
             print(f'  stage {l["name"]:<6} N={l["n"]:<8} niter={l["niter"]:<5} '
                   f'{l["wall"]:.0f}s  denserr(mn/p95/mx)='
@@ -267,6 +244,8 @@ def main(argv=None):
                 icr0rate=args.icr0rate, max_iter=args.max_iter,
                 margin=args.margin, one_sided=args.one_sided,
                 hmode=args.hmode, nsmoothmin=args.nsmoothmin,
+                icr0_stop=args.icr0_stop, polish_iter=args.polish_iter,
+                self_bias=args.self_bias,
                 callback=callback, callback_every=args.oi or args.max_iter,
                 verbose=True)
 

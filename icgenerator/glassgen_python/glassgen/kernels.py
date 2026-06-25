@@ -20,10 +20,35 @@ dw_wc2(ar2) * fNorm1 * dx with fNorm1 = fNorm/h^2.
 """
 import math
 
+import numpy as np
 from numba import njit
 
 # central value of the kernel shape, w_wc2(0); used by the density/Q0 self terms.
 W0 = 21.0 / 16.0
+
+# Wendland C2 self-density bias correction Wzero10, ported verbatim from the
+# piecewise-linear ladder in gasoline master.c (the Wzero10 branch, nSmooth
+# 2..512): breakpoints nSmooth -> factor, linear between. The bare central value
+# W0 = 21/16 over-counts a particle's own contribution, so a relaxed UNIFORM
+# glass settles at rho slightly ABOVE the per-particle mean; scaling the self
+# term by this factor removes the bias (uniform glass -> rho ~ 1.0). The C
+# density self term is (21/16)*Wzero10 (smoothfcn.c KERNEL10).
+_WZERO10_NS = np.array([2, 16, 24, 32, 48, 64, 96, 128, 192, 256, 512],
+                       dtype=np.float64)
+_WZERO10_F = np.array([0.50, 0.80507812, 0.90039062, 0.91347656, 0.93349609,
+                       0.95693359, 0.97158203, 0.97675781, 0.98554688,
+                       0.98847656, 0.99394531], dtype=np.float64)
+
+
+def wzero_wc2(nsmooth):
+    """Self-density bias correction factor for the Wendland C2 self term
+    (gasoline smf->Wzero10). Piecewise-linear in nSmooth over the master.c
+    table (0.95693359 at nSmooth=64); the corrected self central value is
+    W0 * wzero_wc2(nSmooth), so the density self term becomes
+    mass_i * W0 * factor instead of mass_i * W0. Endpoints held outside
+    [2, 512] (C leaves nSmooth>512 uncorrected; nSmooth defaults to 64).
+    Pure-Python (evaluated once per run, not in the njit loop)."""
+    return float(np.interp(nsmooth, _WZERO10_NS, _WZERO10_F))
 
 
 @njit(cache=True, inline='always')

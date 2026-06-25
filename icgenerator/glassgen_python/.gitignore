@@ -2,6 +2,8 @@
 _pipeline/
 # Planning scratch (generated pre-ICs)
 _scratch/
+# C-vs-Python comparison work dir (generated ICs, snapshots, logs, figures)
+comparison/
 
 # Python bytecode / pytest cache
 __pycache__/

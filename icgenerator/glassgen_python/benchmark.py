@@ -57,9 +57,10 @@ sys.path.insert(0, _PKG)
 sys.path.insert(0, _SETUPFILES)
 
 from glassgen.relax import relax
-from glassgen.progressive import (relax_progressive, default_levels,
-                                  cascade_levels)
+from glassgen.progressive import relax_progressive
 from glassgen.diagnostics import operator_consistency, residual_force
+from glassgen.params import (read_param, box_from_param,
+                            target_rho0 as target_from_param)
 
 # Each case names a real test, its IC_createsetup resolution (nx = elements
 # along x), and any density-structure `extra` args - the positional create()
@@ -108,62 +109,6 @@ VARIANTS_HELP = (
     'relaxation; drop it to validate against the C generator). '
     'Names: ' + ', '.join(VARIANTS) + '.'
 )
-
-
-def read_param(path):
-    d = {}
-    with open(path) as f:
-        for line in f:
-            line = line.split('#')[0]
-            if '=' not in line:
-                continue
-            k, v = (s.strip() for s in line.split('=', 1))
-            d[k] = v
-    return d
-
-
-def box_from_param(p):
-    g = lambda k, dv=None: float(p[k]) if k in p else dv  # noqa: E731
-    if int(float(p.get('bPeriodic', 1))) == 0:
-        return None
-    dp = g('dPeriod', 1.0)
-    return np.array([g('dxPeriod', dp), g('dyPeriod', dp), g('dzPeriod', dp)])
-
-
-def target_from_param(p):
-    """Faithful port of pkdUpdateDensity profiles 1/2/3 from a .param."""
-    prof = int(float(p.get('dICdensprofile', 1)))
-    d = int(float(p.get('dICdensdir', 1)))
-    R = float(p.get('dICdensR', 0.0))
-    Rs = float(p.get('dICdensRsmooth', 1.0))
-    inner = float(p.get('dICdensinner', 1.0))
-    outer = float(p.get('dICdensouter', 1.0))
-
-    def rho0(pos):
-        if d < 4:
-            r = np.abs(pos[:, d - 1])
-        elif d == 4:
-            r = np.sqrt((pos ** 2).sum(1))
-        elif d == 5:
-            r = np.sqrt(pos[:, 0] ** 2 + pos[:, 1] ** 2)
-        else:
-            r = pos[:, d - 6]
-        if prof >= 4:
-            raise NotImplementedError(
-                f'density profile {prof} (disk/accdisk) not ported - see '
-                'PLAN.md "Future tasks": accdisk density-table setup')
-        if prof == 1:
-            return np.full(len(pos), outer)
-        if prof == 2:
-            return np.where(r > R, outer, inner)
-        # profile 3
-        if d > 3:
-            return outer + (inner - outer) / (1.0 + np.exp(-(R - r) / Rs))
-        x = pos[:, d - 1]
-        return outer + (inner - outer) * 0.5 * (
-            np.tanh((x + R) / Rs) - np.tanh((x - R) / Rs))
-
-    return rho0
 
 
 # --------------------------------------------------------------------------- #
@@ -336,6 +281,117 @@ def analyze_glass(snap_prefix, label, box, param, target, acc, save_dir,
           flush=True)
 
 
+def _probe_positions(coord, param, n=400):
+    """3D positions sampling the dICdensdir coordinate over coord's range, so
+    the target rho0 can be evaluated as a smooth analytic curve (the EXACT
+    profile) along that axis. Mirrors mapped_coord's direction codes."""
+    xs = np.linspace(float(coord.min()), float(coord.max()), n)
+    probe = np.zeros((n, 3))
+    d = int(float(param.get('dICdensdir', 1)))
+    if d < 4:
+        probe[:, d - 1] = xs            # signed x/y/z
+    elif d == 4 or d == 5:
+        probe[:, 0] = xs                # spherical / cylindrical r -> put on x
+    else:
+        probe[:, d - 6] = xs
+    return xs, probe
+
+
+def plot_run(res, target, param, box, path, title=None, show=True):
+    """Combined per-run figure for --plot:
+      (left)  the convergence history (RelaxResult.history): frms + denserr on a
+              log-y axis, icr0 on a twin axis, polish entry + stop marked;
+      (right) the relaxed glass's binned SPH density profile overlaid on the
+              EXACT target rho0 (evaluated analytically along the dICdensdir
+              coordinate), so the glass density can be compared to the exact one.
+    Saves to `path` and, when show=True, also opens an interactive window
+    (plt.show()). On a headless node (no DISPLAY) it falls back to Agg and just
+    saves."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+    from IC_analysis_framework import binned_profile
+
+    # Pick an INTERACTIVE backend when a display is available so plt.show() opens
+    # a window (the user asked for it); fall back to the always-available Agg
+    # (save-only) on a headless node. switch_backend actually imports the
+    # backend, so a missing GUI toolkit (e.g. no Qt/Tk bindings) is caught here.
+    can_show = show
+    if show and os.environ.get('DISPLAY'):
+        for be in ('TkAgg', 'QtAgg', 'Qt5Agg', 'GTK3Agg'):
+            try:
+                plt.switch_backend(be)
+                break
+            except Exception:
+                continue
+        else:
+            plt.switch_backend('Agg')
+            can_show = False
+    elif show:
+        plt.switch_backend('Agg')
+        can_show = False
+
+    h = np.asarray(res.history, dtype=float)
+    if h.size == 0:
+        return None
+    it, frms, denserr = h[:, 0], h[:, 1], h[:, 2]
+    icr0, polish = h[:, 3], h[:, 5]
+    polish_start = it[polish > 0][0] if np.any(polish > 0) else None
+
+    fig, (axH, axP) = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    # --- left: convergence history (frms/denserr + icr0 twin) ---
+    l_frms, = axH.semilogy(it, frms, color='C3', lw=1.2,
+                           label='frms (residual force)')
+    l_de, = axH.semilogy(it, denserr, color='C0', lw=1.2,
+                         label=r'denserr  $\langle|1-\rho/\rho_0|\rangle$')
+    axH.set_xlabel('iteration'); axH.set_ylabel('error (log)')
+    axH.grid(True, which='both', alpha=0.25)
+    axHr = axH.twinx()
+    l_icr0, = axHr.semilogy(it, icr0, color='C2', lw=1.0, alpha=0.7,
+                            label='icr0 (step)')
+    axHr.set_ylabel('icr0', color='C2')
+    axHr.tick_params(axis='y', labelcolor='C2')
+    if polish_start is not None:
+        axH.axvline(polish_start, color='0.5', ls='--', lw=1.0)
+    axH.axvline(int(it[-1]), color='k', ls=':', lw=1.0)
+    # legend only the labelled data lines (not the axvline markers)
+    handles = [l_frms, l_de, l_icr0]
+    axH.legend(handles, [h.get_label() for h in handles], loc='upper right',
+               fontsize=8)
+    axH.set_title(f'convergence (stop {res.stop_reason} @ {res.niter})',
+                  fontsize=10)
+
+    # --- right: glass density profile vs the EXACT target ---
+    pos = np.asarray(res.pos, float)
+    if box is not None:
+        b = np.asarray(box, float)
+        pos = pos - b * np.rint(pos / b)
+    rho = np.asarray(res.rho, float)
+    coord, clabel = mapped_coord(pos, param)
+    xc, prof = binned_profile(coord, {'rho': rho},
+                              nbins=min(len(rho) // 50 + 8, 128), stat='median')
+    if xc is not None:
+        axP.plot(xc, prof['rho'], 'o', ms=4, color='C0',
+                 label=r'SPH $\rho$ (glass, binned median)')
+    xs, probe = _probe_positions(coord, param)
+    axP.plot(xs, target(probe), 'k-', lw=1.8, label=r'target $\rho_0$ (exact)')
+    axP.set_xlabel(clabel); axP.set_ylabel(r'$\rho$')
+    axP.set_title('glass density vs exact target', fontsize=10)
+    axP.legend(fontsize=8); axP.grid(alpha=0.25)
+
+    if title:
+        fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110, bbox_inches='tight')
+    if can_show:
+        try:
+            plt.show()
+        except Exception as e:
+            print(f'  (plt.show failed, figure saved only: {e})', flush=True)
+    plt.close(fig)
+    return path
+
+
 def load_case(name, spec, workdir, gen_nx=None, gen_vm=0.0, force_gen=False):
     """Generate (or reuse) the case's pre-IC and load it. Returns
     (pos, mass, box, target, pre_path, param_dict)."""
@@ -410,106 +466,6 @@ def _fmt_acc(acc):
             f'E1={acc["e1_mean"]:.2e}')
 
 
-def freeze_probe(res, mass, box, target, nsmooth, save=None, label='',
-                 flavour='gdforce', rhopow=2.0):
-    """Quantify the spatial concentration of the residual force on the final
-    glass - the basis for a per-particle FREEZE / active-set optimisation: most
-    of the per-particle residual force |icvel| sits in a thin high-gradient
-    shell (the density interface), while the bulk is already at the operator
-    noise floor and is just doing noise moves. Reports what fraction of
-    particles could be frozen below several multiples of the operator floor and
-    how concentrated the total force^2 (the descent 'energy') is, and (if save)
-    plots the per-particle force histogram + force vs radius.
-
-    The floor estimate is the uniform-pP residual force per particle (the E0
-    operator force in raw |icvel| units): pP == 1, so it is the force a PERFECT
-    glass still carries from kernel inconsistency - the level below which a
-    particle's force is indistinguishable from SPH discretisation noise."""
-    pos = np.asarray(res.pos, float)
-    if box is not None:
-        box = np.asarray(box, float)
-        pos = pos - box * np.rint(pos / box)
-    rho = np.asarray(res.rho, float)
-    h = np.asarray(res.h, float)
-    mass = np.asarray(mass, float)
-    rho0 = target(pos)
-    # actual residual force (real pP) and the uniform-pP operator floor, both
-    # per-particle |icvel| in the same units.
-    f = residual_force(pos, mass, h, rho, rho0, box, rhopow=rhopow,
-                       nsmooth=nsmooth, flavour=flavour)
-    f_floor = residual_force(pos, mass, h, rho, rho0, box, rhopow=rhopow,
-                             nsmooth=nsmooth, flavour=flavour, uniform_pP=True)
-    floor = np.median(f_floor)               # typical operator-noise force
-    n = len(f)
-    order = np.argsort(f)[::-1]
-    f2 = f * f
-    cum = np.cumsum(f2[order]) / f2.sum()
-    print(f'  freeze-probe [{label}]: N={n}  frms={np.sqrt(f2.mean()):.3e}  '
-          f'operator-floor(med |icvel|,pP=1)={floor:.3e}', flush=True)
-    for c in (1.0, 2.0, 3.0, 5.0):
-        frac = float(np.mean(f < c * floor))
-        print(f'      |icvel| < {c:.0f}x floor : {100*frac:5.1f}% of particles '
-              f'freezable', flush=True)
-    for topf in (0.01, 0.05, 0.10):
-        k = max(1, int(topf * n))
-        print(f'      top {100*topf:4.1f}% by force carry '
-              f'{100*cum[k-1]:5.1f}% of total force^2', flush=True)
-    if save:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        r = np.sqrt((pos * pos).sum(1))
-        fig, ax = plt.subplots(1, 2, figsize=(13, 5))
-        ax[0].hist(np.log10(np.maximum(f, 1e-30)), bins=80, color='C3',
-                   alpha=0.8)
-        ax[0].axvline(np.log10(floor), color='k', ls='--', lw=1,
-                      label=f'operator floor {floor:.2e}')
-        ax[0].set_xlabel('log10 |icvel| (per-particle residual force)')
-        ax[0].set_ylabel('count'); ax[0].legend(fontsize=8)
-        ax[0].set_title(f'{label}: residual-force distribution')
-        ax[1].scatter(r, f, s=2, alpha=0.25, color='C0', rasterized=True)
-        ax[1].axhline(floor, color='k', ls='--', lw=1)
-        ax[1].set_yscale('log')
-        ax[1].set_xlabel('radius from box centre')
-        ax[1].set_ylabel('|icvel|')
-        ax[1].set_title(f'{label}: force vs radius (interface concentration)')
-        fig.tight_layout(); fig.savefig(save, dpi=110, bbox_inches='tight')
-        plt.close(fig)
-        print(f'      freeze-probe plot -> {save}', flush=True)
-    return f, f_floor
-
-
-def run_c(pre, box, nsmooth, max_iter):
-    """Optionally time gasoline.gdicgen on the same pre-IC (profile from its
-    own .param). Returns (wall, niter) or None if it can't run."""
-    icgen = os.path.join(_TESTSUITE, 'icgenerator', 'gasoline',
-                         'gasoline.gdicgen')
-    if not os.path.exists(icgen):
-        print('  (no gasoline.gdicgen binary - skipping C)')
-        return None
-    out = os.path.join(_PKG, 'comparison', '_bench_C')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    param = os.path.splitext(pre)[0] + '.param'
-    nproc = max(1, (os.cpu_count() or 2) // 2)
-    cmd = ['mpirun', '-np', str(nproc), icgen, '-o', out, '-I', pre,
-           '-s', str(nsmooth), '-ICR0', '1.0', '-n', str(max_iter),
-           '-oi', str(max_iter), '-ICRLOOP0', '0.5', '-ICrhopow', '2.0',
-           '-ICR0Rate', '1.5', param]
-    for f in glob.glob(out + '*'):
-        os.remove(f)
-    t0 = time.perf_counter()
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    wall = time.perf_counter() - t0
-    snaps = sorted(glob.glob(out + '.[0-9]*'),
-                   key=lambda s: int(s.rsplit('.', 1)[1])
-                   if s.rsplit('.', 1)[1].isdigit() else -1)
-    niter = int(snaps[-1].rsplit('.', 1)[1]) if snaps else -1
-    if r.returncode != 0:
-        print(f'  (C run failed rc={r.returncode})')
-        return None
-    return wall, niter
-
-
 def main():
     ap = argparse.ArgumentParser(
         description='glassgen icgenerator performance + accuracy benchmark')
@@ -524,25 +480,14 @@ def main():
                     help='disable all early-stop criteria (icr0_stop=0, '
                          'polish_iter=0) so the run goes the full --max-iter '
                          'budget.')
-    ap.add_argument('--freeze-probe', dest='freeze_probe', action='store_true',
-                    help='after each relax, report how spatially concentrated '
-                         'the residual force is (freezable fraction below '
-                         'multiples of the operator floor + force^2 '
-                         'concentration) and save a force-distribution / '
-                         'force-vs-radius plot - sizes the per-particle '
-                         'freeze/active-set optimisation.')
-    ap.add_argument('--tail-plots', dest='tail_plots', action='store_true',
-                    help='record per-iteration p95/max of denserr + residual '
-                         'force (relax diagnostics=True) and save '
-                         '<case>_<variant>_history_{p95,max}.png - shows whether '
-                         'deep polish keeps tightening the interface tail after '
-                         'the mean has flattened. Adds percentile cost per iter.')
-    ap.add_argument('--history-plot', dest='history_plot', action='store_true',
-                    help='save a convergence plot (frms + denserr + icr0 vs '
-                         'iteration, polish entry + stop marked) per run to '
-                         '<work-dir>/analysis/<case>_<variant>_history.png '
-                         '(uses RelaxResult.history; the fine stage for '
-                         'progressive runs).')
+    ap.add_argument('--plot', dest='plot', action='store_true',
+                    help='show (plt.show) AND save the per-run figures: a '
+                         'convergence+profile figure (frms/denserr/icr0 history '
+                         'plus the relaxed glass density profile overlaid on the '
+                         'EXACT target rho0 along the dICdensdir coordinate) AND '
+                         'the in-process analysis (grid SPH density render + '
+                         'density-error histogram). All under '
+                         '<work-dir>/analysis/.')
     ap.add_argument('--history-every', dest='history_every', type=int,
                     default=0, metavar='N',
                     help='print the per-iteration convergence trajectory '
@@ -562,41 +507,24 @@ def main():
     ap.add_argument('--force-gen', action='store_true',
                     help='regenerate the pre-IC even if it already exists '
                          '(default: reuse the cached file)')
-    ap.add_argument('--analyze', action='store_true',
-                    help='after relaxing, write the glass snapshot and analyze it '
-                         'in-process (density render + rho-vs-target profile + '
-                         'density-error histogram) under <work-dir>/analysis')
-    ap.add_argument('--analyze-res', type=int, default=512,
-                    help='render pixel resolution for --analyze (default 512)')
-    ap.add_argument('--analyze-backend', default='grid',
-                    help='render backend for --analyze (default grid: sph_interp '
-                         '2-D SPH deposit, pynbody-free)')
-    ap.add_argument('--progressive', action='store_true',
-                    help='multi-resolution: relax a coarse set (nx-coarse), '
-                         'split up to full res, then a fine confined relax '
-                         '(instead of one single-resolution relax per variant)')
-    ap.add_argument('--nx-coarse', dest='nx_coarse', type=int, default=32,
-                    help='coarse resolution for the LEGACY --legacy-coarse path '
-                         '(default 32)')
+    ap.add_argument('--no-progressive', dest='progressive',
+                    action='store_false',
+                    help='disable the DEFAULT multi-resolution path and run a '
+                         'single full-resolution relax per variant instead. The '
+                         'default (progressive) coarsens the input to the auto '
+                         'density-chosen coarse count, relaxes it, then cascades '
+                         '(x2 splits + short confined heals) back up to full '
+                         'res with a final confined relax.')
     ap.add_argument('--coarse-target', dest='coarse_target', default='auto',
                     help='coarse particle count for the default merge path: '
                          '"auto" picks N_coarse_min from the target density '
                          '(max M|grad rho|^3/(alpha^3 rho^4)); an integer forces '
                          'a specific coarse count. The merge factor F is then '
                          'floor_pow2(N_full/target). (default auto)')
-    ap.add_argument('--alpha', type=float, default=2.0,
+    ap.add_argument('--alpha', type=float, default=4.0,
                     help='resolution tolerance for the auto coarse count '
                          '(coarse spacing <= alpha * gradient length; default '
-                         '2.0, calibrated on mhdcollapse 360:1 -> nx_coarse~25)')
-    ap.add_argument('--legacy-coarse', dest='legacy_coarse',
-                    action='store_true',
-                    help='use the old IC_createsetup nx_coarse coarse seed '
-                         '(separate low-res file) instead of merging the input')
-    ap.add_argument('--cascade', action='store_true',
-                    help='progressive: climb to full res one x2 split at a '
-                         'time, running a few confined iters after each split '
-                         '(multigrid-style), instead of one big jump. Implies '
-                         '--progressive.')
+                         '4.0)')
     ap.add_argument('--icr0-stop', dest='icr0_stop', type=float, default=3e-3,
                     help='absolute icr0 stop (the DEFAULT finish): stop once '
                          'the median-smoothed icr0 (max step as a fraction of '
@@ -609,22 +537,20 @@ def main():
                          'cascade inter-iter heal applied to the final stage). '
                          'Composes with --icr0-stop (earlier convergence still '
                          'wins). 0 = off.')
-    ap.add_argument('--momentum', type=float, default=0.0,
+    ap.add_argument('--momentum', type=float, default=0.5,
                     help='heavy-ball coefficient on the post-split (confined, '
                          'reanneal=False) progressive stages; coarse stays '
-                         'beta=0 (default 0.0 = off; ~0.3-0.5 accelerates the '
-                         'fine-stage frms tail)')
+                         'beta=0 (default 0.5, accelerates the fine-stage frms '
+                         'tail ~2x; 0 = off)')
     ap.add_argument('--inter-iter', dest='inter_iter', type=int, default=10,
-                    help='icgen iterations after each intermediate x2 split '
-                         'in --cascade (default 10)')
-    ap.add_argument('--with-c', action='store_true',
-                    help='also time gasoline.gdicgen on each case (slow)')
+                    help='icgen iterations after each intermediate x2 split in '
+                         'the progressive cascade (default 10)')
+    ap.add_argument('--no-self-bias', dest='self_bias', action='store_false',
+                    help='disable the Wendland C2 self-density bias correction '
+                         '(gasoline Wzero10) - density then uses the bare W0 '
+                         'self term. Default: correction ON (uniform glass '
+                         'relaxes to rho ~ 1.0).')
     args = ap.parse_args()
-    # --cascade is a flavour of the progressive multi-resolution path; enable it
-    # implicitly so `--cascade` alone works (otherwise the single-relax branch
-    # runs and the flag is silently ignored).
-    if args.cascade:
-        args.progressive = True
 
     cases = [c.strip() for c in args.cases.split(',') if c.strip()]
     variants = [v.strip() for v in args.variants.split(',') if v.strip()]
@@ -651,44 +577,13 @@ def main():
             if vname not in VARIANTS:
                 print(f'  unknown variant {vname!r}, skipping'); continue
             kw = dict(VARIANTS[vname])
-            if args.tail_plots:
-                kw['diagnostics'] = True
+            kw['self_bias'] = args.self_bias   # -> relax (all stages)
             t0 = time.perf_counter()
-            if args.progressive and args.legacy_coarse:
-                # LEGACY: coarse seed = a fresh IC_createsetup pre-IC at
-                # nx_coarse (separate low-res file), à la option A in PLAN.md.
-                def coarse_seed(_n, _box, total_mass, _test=spec['test'],
-                                _extra=spec.get('extra')):
-                    cpre, _ = gen_pre_ic(_test, args.nx_coarse, args.gen_vm,
-                                         _extra, workdir, force=args.force_gen)
-                    import readtipsy as tip
-                    cg, _, _, _, _ = tip.readtipsy(cpre)
-                    cpos = cg[:, 1:4].astype(np.float64)
-                    return cpos, np.full(len(cpos), total_mass / len(cpos))
-                if args.cascade:
-                    levels = cascade_levels(
-                        nx, args.nx_coarse, inter_iter=args.inter_iter,
-                        momentum=args.momentum, icr0_stop=args.icr0_stop,
-                        polish_iter=args.polish_iter,
-                        coarse_kw=dict(max_iter=args.max_iter),
-                        fine_kw=dict(max_iter=args.max_iter))
-                else:
-                    levels = default_levels(
-                        nx, args.nx_coarse, momentum=args.momentum,
-                        icr0_stop=args.icr0_stop, polish_iter=args.polish_iter,
-                        coarse_kw=dict(max_iter=args.max_iter),
-                        fine_kw=dict(confine=True, reanneal=False,
-                                     max_iter=args.max_iter))
-                res = relax_progressive(
-                    pos0, mass, target, box, nx_full=nx,
-                    nx_coarse=args.nx_coarse, levels=levels,
-                    coarse_seed=coarse_seed, nsmooth=args.nsmooth,
-                    margin=args.margin,
-                    verbose=False, **kw)
-            elif args.progressive:
-                # DEFAULT progressive: merge the full-res input down to the
-                # density-chosen coarse count (auto N_coarse_min, alpha=2),
-                # relax, cascade back to the input count 1:1. coarse_target
+            if args.progressive:
+                # multi-resolution: coarsen the full-res input down to the auto
+                # density-chosen coarse count (N_coarse_min, alpha), relax it,
+                # then cascade (x2 splits + short confined heals) back up to the
+                # input count 1:1 with a final confined relax. coarse_target
                 # overrides 'auto' with an explicit coarse particle count.
                 ct = args.coarse_target
                 ct = ct if ct == 'auto' else int(ct)
@@ -699,6 +594,7 @@ def main():
                     margin=args.margin, max_iter=args.max_iter,
                     momentum=args.momentum,
                     icr0_stop=args.icr0_stop, polish_iter=args.polish_iter,
+                    cap=2.0, start_icr0=2.0,
                     verbose=args.history_every > 0, **kw)
             else:
                 res = relax(pos0.copy(), mass, target, box=box,
@@ -724,9 +620,9 @@ def main():
             # hidden behind the final number.
             if res.pos_prepolish is not None:
                 from types import SimpleNamespace
-                pre = SimpleNamespace(pos=res.pos_prepolish,
-                                      h=res.h_prepolish, rho=res.rho_prepolish)
-                acc_pre = accuracy(pre, mass_fin, box, target, args.nsmooth)
+                prepol = SimpleNamespace(pos=res.pos_prepolish,
+                                         h=res.h_prepolish, rho=res.rho_prepolish)
+                acc_pre = accuracy(prepol, mass_fin, box, target, args.nsmooth)
                 print(f'      non-polish @it{res.polish_iter0:<5} '
                       f'{_fmt_acc(acc_pre)}', flush=True)
                 print(f'      polish     @it{res.niter:<5} {_fmt_acc(acc)}'
@@ -763,52 +659,23 @@ def main():
                               '{:>6}'.format(h[0], h[2], h[1], h[3],
                                              'yes' if h[5] else 'no'),
                               flush=True)
-            if args.freeze_probe:
+            if args.plot:
                 pdir = os.path.join(workdir, 'analysis')
                 os.makedirs(pdir, exist_ok=True)
-                freeze_probe(res, mass_fin, box, target, args.nsmooth,
-                             save=os.path.join(
-                                 pdir, f'{cname}_{vname}_freeze.png'),
-                             label=f'{cname}/{vname}')
-            if args.history_plot and getattr(res, 'history', None):
-                from glassgen.diagnostics import plot_history
-                pdir = os.path.join(workdir, 'analysis')
-                os.makedirs(pdir, exist_ok=True)
-                ppath = os.path.join(
-                    pdir, f'{cname}_{vname}_history.png')
-                plot_history(res.history, ppath,
-                             title=f'{cname}/{vname}  (stop {res.stop_reason} '
-                                   f'@ {res.niter})',
-                             stop_reason=res.stop_reason)
-                print(f'      history plot -> {ppath}', flush=True)
-            if args.tail_plots and getattr(res, 'tail_history', None):
-                from glassgen.diagnostics import plot_error_history
-                pdir = os.path.join(workdir, 'analysis')
-                os.makedirs(pdir, exist_ok=True)
-                for stat in ('p95', 'max'):
-                    ppath = os.path.join(
-                        pdir, f'{cname}_{vname}_history_{stat}.png')
-                    plot_error_history(
-                        res.tail_history, ppath, stat=stat,
-                        title=f'{cname}/{vname} {stat} errors  '
-                              f'(stop {res.stop_reason} @ {res.niter})',
-                        stop_reason=res.stop_reason)
-                    print(f'      {stat} error plot -> {ppath}', flush=True)
-            if args.analyze:
+                # 1) convergence history + glass density profile vs the EXACT
+                #    target (shown + saved).
+                if getattr(res, 'history', None):
+                    ppath = os.path.join(pdir, f'{cname}_{vname}_plot.png')
+                    plot_run(res, target, param, box, ppath,
+                             title=f'{cname}/{vname}', show=True)
+                    print(f'      plot -> {ppath}', flush=True)
+                # 2) in-process analysis: grid SPH density render + density-error
+                #    histogram (writes the glass snapshot first).
                 out_prefix = os.path.join(
                     df, f'{spec["test"]}{nx}_glass_{vname}')
                 write_glass_snapshot(pre, out_prefix, res, mass_fin)
                 analyze_glass(out_prefix, f'{cname}/{vname}', box, param,
-                              target, acc, os.path.join(workdir, 'analysis'),
-                              res=args.analyze_res, backend=args.analyze_backend)
-        if args.with_c:
-            print('  running gasoline.gdicgen (C) ...', flush=True)
-            c = run_c(pre, box, args.nsmooth, args.max_iter)
-            if c:
-                cw, cn = c
-                print(f'  {"C-gdicgen":<13} niter={cn:<5} wall={cw:7.1f}s  '
-                      f'{cw/max(cn,1)*1e3:6.1f} ms/it  '
-                      f'{n*max(cn,1)/cw/1e6:6.1f} Mp*it/s', flush=True)
+                              target, acc, pdir, res=512, backend='grid')
 
     # summary table. denserr = SPH density vs target; force = residual descent
     # force (the convergence/stop basis). Both as mean/p95/max.

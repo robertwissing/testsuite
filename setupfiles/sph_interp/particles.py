@@ -114,7 +114,9 @@ def from_tipsy(snap, fields=("rho",), nsmooth=64, periodic=True, box=None):
     h = np.asarray(h, dtype=np.float64).ravel()[:ngas]
 
     if box is None:
-        box = _read_box(snap)
+        box = _read_param_box(snap)          # gasoline .param dxPeriod (preferred)
+    if box is None:
+        box = _read_box(snap)                # else run .log BOX PARAMETERS
     if box is None:
         lo = pos.min(axis=0)
         hi = pos.max(axis=0)
@@ -147,6 +149,79 @@ def from_tipsy(snap, fields=("rho",), nsmooth=64, periodic=True, box=None):
 
     return Particles(pos=pos, mass=mass, rho=rho, h=h, values=values,
                      box=box, periodic=periodic)
+
+
+def _param_dict(snap):
+    """Parse the sibling gasoline `.param` (`<snap-stem>.param` next to
+    `<snap-stem>.00000`) into a {key: value-string} dict, or None if absent."""
+    import os
+    import re
+    stem = re.sub(r"\.\d+$", "", snap)       # strip the .NNNNN snapshot suffix
+    pf = stem + ".param"
+    if not os.path.exists(pf):
+        return None
+    vals = {}
+    try:
+        with open(pf) as f:
+            for line in f:
+                line = line.split("#")[0]
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    vals[k.strip()] = v.strip()
+    except OSError:
+        return None
+    return vals
+
+
+def _read_param_box(snap):
+    """Periodic box period (3,) from the sibling gasoline `.param` (dxPeriod/
+    dyPeriod/dzPeriod). Returns None if absent. This is the authoritative box for
+    an IC we generated: it carries the true period, not the particle extent."""
+    vals = _param_dict(snap)
+    if vals is None:
+        return None
+
+    def g(key):
+        try:
+            return float(vals[key])
+        except (KeyError, ValueError):
+            return None
+
+    px, py, pz = g("dxPeriod"), g("dyPeriod"), g("dzPeriod")
+    if px and py and pz:
+        return np.array([px, py, pz], dtype=np.float64)
+    return None
+
+
+def read_param_tufac(snap):
+    """dTuFac = dGasConst/((gamma-1)*mu) computed from the sibling gasoline
+    `.param` units (dKpcUnit, dMsolUnit, dMeanMolWeight, dConstGamma), matching
+    IC_writeascii.convertfromcodeunits exactly, so the specific internal energy is
+    recovered as u = dTuFac * (tipsy temperature column). The IC writer stored
+    temperature = u / dTuFac (it has no dGasConst line, so read_tufac's .log path
+    can't recover this -- compute it from the unit system instead).
+
+    Returns dTuFac (float) or None if the .param or required unit keys are absent.
+    """
+    vals = _param_dict(snap)
+    if vals is None:
+        return None
+
+    def g(key):
+        try:
+            return float(vals[key])
+        except (KeyError, ValueError):
+            return None
+
+    kpc, msol = g("dKpcUnit"), g("dMsolUnit")
+    mu, gamma = g("dMeanMolWeight"), g("dConstGamma")
+    if kpc is None or msol is None or gamma is None or not mu or gamma == 1.0:
+        return None
+    # same constants as IC_writeascii.convertfromcodeunits
+    MSOLG, KBOLTZ, MHYDR = 1.99e33, 1.38e-16, 1.67e-24
+    KPCCM, GCGS = 3.085678e21, 6.67e-8
+    dGasConst = kpc * KPCCM * KBOLTZ / (MHYDR * GCGS * msol * MSOLG)
+    return dGasConst / ((gamma - 1.0) * mu)
 
 
 def _read_box(snap):

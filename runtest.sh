@@ -1,30 +1,25 @@
 #!/bin/bash
 
-export SPHEXA_DIR=
-export GASOLINE_DIR=
-export CHANGA_DIR=
+export SPHEXA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/sphexa/sphexa/build/main/src/sphexa/
+export GASOLINE_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/gasoline_claude/gasoline_claude
+export CHANGA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/a/testsuite/ci/changa_ci_test/changa/
+export AREPO_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/a/testsuite/codes/arepo/
 
-#Directory for the ic generator and the setupfiles (you have to do make for icgenerator/mdl/mpi and make mpi for icgenerator/gasoline/
+#Directory for the setupfiles
 current_dir=$(pwd -P)
-ICdir=$current_dir/icgenerator/gasoline/
-gasolineicgen=gasoline.gdicgen
 analysisdir=$current_dir/setupfiles/
+#Python (numba) glass-relaxation IC generator package root (see PLAN.md there)
+glassgenpydir=$current_dir/icgenerator/glassgen_python
 
-# Directory where the executable(gasoline) is and the name of it:
+# AREPO (code=3): how ICconvert_tipsytoarepo.py turns the tipsy IC into an AREPO
+# moving-mesh IC. "particles" (default) = a 1:1 copy of the SPH particles as mesh
+# generators (most faithful, no interpolation; AREPO tessellates). For a
+# regridded IC instead set "voronoi", "amr" or "uniform" (deposits the SPH fields
+# onto that mesh, petkova/mass-conserving).
+AREPOICMODE="particles"
 
-gasoline_dir=$GASOLINE_DIR
-gasoline_run=gasolinemhd
-
-#Changa directory
-changa_dir=$CHANGA_DIR
-changa_run=ChaNGa.smp
-
-#SPHEXA executable directory and binary name (used when code=2)
-sphexa_dir=$SPHEXA_DIR
-sphexa_run=sphexa
-
-#Code is selected by the 4th positional argument: 0=Gasoline 1=ChaNGa 2=SPH-EXA
-#The ChaNGa dir/gasolinerun/runlauncher are overridden in the code-selection block after arg parsing.
+#Code is selected by the 4th positional argument: 0=Gasoline 1=ChaNGa 2=SPH-EXA 3=AREPO
+#The executable directory and binary name per code are set in the code-selection block after arg parsing.
 
 #If running serial/mpi or with charmrun
 #mpirun="$dir/charmrun.smp +p 63"
@@ -53,16 +48,33 @@ fmt() {
     }'
 }
 
-#Specific config for glass generation. Can leave be, should work for all, but if sharper density is needed increase ICrhopow (though at the cost of higher zero order errors usually), ICR0 determines how much of the periodic box particles should move on average in beginning, can be set to 1, ensures that whatever IC you give it, it will go towards the target density (and remove long-range biases). Initially density gradients are bad and it can be hard for the partilces to correctly fit the large-scale density structure in one go, as such we quickly decay the speed and then increase it to some factor of the initial ICR0 this is eveventually reduced as we get closer to the target density. ICR0rate is how fast the global speed should decay. and -n 4800 is just a maximum relaxation number it usually relaxes within 200-1000 steps(depending on the other parameters and IC). and oi is output incase you want to see what is going on during relaxation.
-ICCONFIG="-ICR0 1.0 -n 4800 -oi 4800 -ICRLOOP0 0.5 -ICrhopow 2.0 -ICR0Rate 1.5"
+# Glass relaxation: the Python (numba) glassgen.cli relaxes the pre-IC into a
+# glass (multi-resolution cascade + heavy-ball momentum + the Wendland C2
+# self-density correction; writes ${glassfile}_IC directly). The target density
+# is read AUTOMATICALLY from the pre-IC .param (dICdens* profiles 1/2/3 =
+# uniform/step/tanh). For a disk/accdisk profile (>=4) add a density table to
+# GLASSMODE (e.g. "--table densitytable_xdr --direction r_sph").
+#
+# Extra glassgen.cli options appended to the default run, e.g.
+#   "--no-progressive"  single full-resolution relax (no cascade)
+#   "--icr0-stop 1e-3"  tighter glass (default 3e-3);  "--momentum 0.3"
+#   "--no-self-bias"    bare W0 density self term
+# Empty = the production defaults (progressive cascade, momentum 0.5,
+# icr0-stop 3e-3, self-bias on). ICCONFIGPY sets the per-stage iteration cap and
+# the ICR0/ICRLOOP0/rhopow/rate knobs (ICR0 = initial average move fraction of
+# the box; rhopow sharpens the density match; -n is the max relaxation steps).
+GLASSMODE=""
+ICCONFIGPY="-n 4800 -oi 0 --icr0 1.0 --icrloop0 0.5 --rhopow 2.0 --icr0rate 1.5"
 
 #Extra condition during runtime
-EXTRACONDALL=" -facQ 1.0 -fch 1.0 -psidecfac 1.0 -thermaldiff 0.1 -alpha 2.0 -beta 8.0 -nInitCorrIter 50 -smin 32 -smax 40000 "
+#EXTRACONDALL=" -facQ 1.0 -fch 1.0 -psidecfac 1.0 -thermaldiff 0.1 -alpha 2.0 -beta 8.0 -nInitCorrIter 50 -smin 32 -smax 40000 "
+EXTRACONDALL=" "
+
 
 #Extra runtime conditions and output fields specific to SPH-EXA (code=2)
-EXTRACONDSPHEXA=" --prop magneto-ve "
+EXTRACONDSPHEXA=" --prop std "
 
-fields="m,x,y,z,vx,vy,vz,temp,u,rho,h,nc,Bx,By,Bz,divB"
+fields="m,x,y,z,vx,vy,vz,temp,u,rho,h,nc"
 
 
 usage() {
@@ -86,7 +98,7 @@ usage() {
     echo "                     0: lattice"
     echo "                     1: random"
     echo "                     2: glass"
-    echo "  code               Simulation code: 0: Gasoline  1: ChaNGa  2: SPH-EXA"
+    echo "  code               Simulation code: 0: Gasoline  1: ChaNGa  2: SPH-EXA  3: AREPO"
     echo "  vm                 (optional) enable variable SPH particle masses in the IC generator (default 0 = equal-mass particles)."
     echo "  extra              (optional) extra flags appended to the runtime command."
     echo "If glass data file exist for a specific Nsmooth it will skipp the glass generation and run the simulation. If you choose an nSmooth that does not have a glass datafile it will do the whole glass generation again."
@@ -234,10 +246,6 @@ setup_alfven() {
 # Function for Shock-tube setup with generic parameters
 setup_shocktube() {
     shock=${args[0]:-1.0}
-
-
-
-    
     # Array mapping shock indices to shock names (must cover every `choice` in
     # IC_setup_shocktube.choose_shock, else the index check below rejects them)
     shocks=(
@@ -446,7 +454,7 @@ setup_polytrope() {
         runname_extra=""
 }
 
-# Function for mhdcollapse setup with generic parameters
+# Function for static blobs (force test) setup with generic parameters
 setup_areablob() {
     # Set default values if not specified
     rhodiff=${args[0]:-1000}
@@ -461,13 +469,13 @@ setup_areablob() {
 
     # Setup based on the potentially updated values
     EXTRACONDIC="$rhodiff $multcloud"
-    EXTRACONDRUN=" -n 900 -dt 0.0001  "
+    EXTRACONDRUN="  "
     prefile_extra="mult$(fmt "${multcloud}")rd$(fmt "${rhodiff}")${GLASSNAME}"
     glassfile_extra="mult$(fmt "${multcloud}")rd$(fmt "${rhodiff}")${GLASSNAME}"
     runname_extra="mult$(fmt "${multcloud}")rd$(fmt "${rhodiff}")"
 }
 
-# Function for Orzag-Tang Vortex setup with generic parameters
+# Function for Taylor-green setup with generic parameters
 setup_taylorgreen() {
     etavisc=${args[0]:-0.1}
     xivisc=${args[1]:-0.0}
@@ -913,12 +921,13 @@ cd test_cases/$testsim
 CURRENT_DIR=$(pwd -P)
 
 if [ "$#" -lt 4 ]; then
-    echo "Usage: $0 <Nsmooth> <Nres> <0: lattice 1: rand 2: glass> <code 0:Gasoline 1:ChaNGa 2:SPH-EXA> [vm] [extra]"
+    echo "Usage: $0 <Nsmooth> <Nres> <0: lattice 1: rand 2: glass> <code 0:Gasoline 1:ChaNGa 2:SPH-EXA 3:AREPO> [vm] [extra]"
     exit 1
 fi
 echo "$0 $1 $2 $3 $4 $5 $6"
 
 # Append the optional extra positional flags ($6) to the runtime conditions
+echo "$EXTRACONDALL"
 EXTRACONDRUN=" $EXTRACONDRUN $EXTRACONDALL $6 "
 
 # Varied-mass argument ($5): changes the particle distribution itself, so it
@@ -974,17 +983,24 @@ fi
 if [ "$4" -eq 0 ]; then
 echo "RUNNING GASOLINE"
     codename="GASOLINE"
-    dir=$gasoline_dir
-    gasolinerun=$gasoline_run
+    dir=$GASOLINE_DIR
+    coderun=gasolinemhd
 elif [ "$4" -eq 1 ]; then
 echo "RUNNING CHANGA"
     codename="CHANGA"
-    dir=$changa_dir
-    gasolinerun=$changa_run
-    runlauncher="$changa_dir/charmrun +p 64"
-else
+    dir=$CHANGA_DIR
+    coderun=ChaNGa.smp
+    runlauncher="$CHANGA_DIR/charmrun +p 4"
+elif [ "$4" -eq 2 ]; then
 echo "RUNNING SPH-EXA"
     codename="SPHEXA"
+    dir=$SPHEXA_DIR
+    coderun=sphexa
+elif [ "$4" -eq 3 ]; then
+echo "RUNNING AREPO"
+    codename="AREPO"
+    dir=$AREPO_DIR
+    coderun=Arepo
 fi
 
 glassfile_prefix="$testsim$2_glassN$1${glassfile_extra}"
@@ -1019,25 +1035,15 @@ mkdir initruns
     if [ -f "${glassfile}_IC" -o -f "datafiles/$ICfile.00000" ]; then
         echo "File ${glassfile}_IC already exists. Skipping creatin.."
     else
-	relaxglass=(mpirun -np $(($(nproc) / 2)) ${ICdir}/${gasolineicgen} -o $glassfile -I datafiles/$prefile.00000 -s $1 $ICCONFIG datafiles/$prefile.param)
+	# Python (numba) glass relaxation - glassgen.cli writes ${glassfile}_IC
+	# directly; target density is read from the .param.
+	relaxglass=(env PYTHONPATH="${glassgenpydir}" python -m glassgen.cli -o "$glassfile" -I datafiles/$prefile.00000 -s $1 $ICCONFIGPY --param datafiles/$prefile.param $GLASSMODE)
 	echo "${relaxglass[@]}"
 	"${relaxglass[@]}"
-
-	# Check if the command was successful
 	if [ $? -ne 0 ]; then
 	    echo "Error: Command failed to execute successfully."
 	    exit 1
 	fi
-
-	regex_pattern="${glassfile_prefix}\.(\d+)"
-
-	# Find the highest file number that matches the specific pattern in the directory
-	highest_number_file=$(ls -1 $directory | grep -oP "${regex_pattern}" | sort -nr | head -n1)
-	echo "HIGHEST NUMBER ${highest_number_file}"
-	
-	echo "${directory}/${highest_number_file}" "${glassfile}_IC"
-	cp "${directory}/${highest_number_file}" "${glassfile}_IC"
-
     fi
 
     if [ -f "datafiles/$ICfile.00000" ]; then
@@ -1058,14 +1064,12 @@ mkdir initruns
     mkdir $runname
     echo "Code selection: $4"
     if [ "$4" == 0 ] || [ "$4" == 1 ]; then
-    # TODO: add dCloudDensity as a recognized parameter in ChaNGa; stripping as workaround
     if [ "$4" == 1 ]; then sed -i '/^dCloudDensity/d' datafiles/$ICfile.param; fi
-        runline=( ${runlauncher:-$mpirun} $dir/${gasolinerun} -s $1 -o $runname/$runname -I datafiles/$ICfile.00000 $EXTRACONDRUN datafiles/$ICfile.param)
+        runline=( ${runlauncher:-$mpirun} $dir/${coderun} -s $1 -o $runname/$runname -I datafiles/$ICfile.00000 $EXTRACONDRUN datafiles/$ICfile.param)
     fi
 
     if [ "$4" == 2 ]; then
-	# Read steps, output cadence and dDelta from the tipsy .param file to drive SPH-EXA
-	# iOutInterval * dDelta -> output interval (-w); nSteps * dDelta -> end time (-s)
+	# SPH-EXA
 	paramfile="datafiles/$ICfile.param"
 
 	get_param () {
@@ -1100,7 +1104,74 @@ mkdir initruns
 	# convert the tipsy IC into the SPH-EXA hdf5 format
 	echo "python ${analysisdir}/ICconvert_tipsytosphexa.py datafiles/$ICfile.00000 datafiles/$ICfile "
 	python ${analysisdir}/ICconvert_tipsytosphexa.py datafiles/$ICfile.00000 datafiles/$ICfile
-	runline=( "$sphexa_dir/$sphexa_run" --init "./datafiles/$ICfile.h5" -o "$runname/$runname.h5" $EXTRACONDSPHEXA -s "$endtime" -w "$outinterval" -f "$fields")
+	runline=( "$dir/$coderun" --init "./datafiles/$ICfile.h5" -o "$runname/$runname.h5" $EXTRACONDSPHEXA -s "$endtime" -w "$outinterval" -f "$fields")
+    fi
+
+    if [ "$4" == 3 ]; then
+	# AREPO moving-mesh: convert the tipsy IC -> AREPO HDF5 IC (sph_interp),
+	# then build an AREPO param.txt whose BoxSize / run times come from the
+	# tipsy .param we generated for this lattice (NOT the particle extent).
+	paramfile="datafiles/$ICfile.param"
+
+	get_param () {
+	    awk -F= -v key="$1" '
+		$1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+		    gsub(/[[:space:]]*/, "", $2); print $2
+		}' "$paramfile"
+	}
+
+	dxP=$(get_param dxPeriod)
+	dyP=$(get_param dyPeriod)
+	dzP=$(get_param dzPeriod)
+	iOutInterval=$(get_param iOutInterval)
+	if [[ -z "$dxP" || -z "$iOutInterval" ]]; then
+	    echo "Error: missing dxPeriod/iOutInterval in $paramfile"
+	    exit 1
+	fi
+	[ -z "$dyP" ] && dyP=$dxP
+	[ -z "$dzP" ] && dzP=$dxP
+	# AREPO BoxSize is the X period; the other axes are set by the COMPILE-TIME
+	# LONG_Y/LONG_Z = dyPeriod/dxPeriod, dzPeriod/dxPeriod (boxSize_Y=BoxSize*LONG_Y).
+	# (The run times / timestepping go into param.txt on the Python side below.)
+	boxsize=$dxP
+	LONGY=$(awk -v a="$dyP" -v b="$dxP" 'BEGIN { printf "%.10g", a/b }')
+	LONGZ=$(awk -v a="$dzP" -v b="$dxP" 'BEGIN { printf "%.10g", a/b }')
+
+	# Non-cubic box -> AREPO needs LONG_Y/LONG_Z compiled in (public AREPO is
+	# cubic by default). Cubic (both ~1): use the prebuilt MHD `Arepo`. Else
+	# build (once, cached by aspect tag) Arepo_asp<LY>_<LZ> from Config.sh + the
+	# LONG_Y/LONG_Z lines.
+	iscubic=$(awk -v y="$LONGY" -v z="$LONGZ" 'BEGIN { d=0.0005; print (y>1-d && y<1+d && z>1-d && z<1+d)?1:0 }')
+	if [ "$iscubic" != "1" ]; then
+	    tag=$(awk -v y="$LONGY" -v z="$LONGZ" 'BEGIN { printf "%.4f_%.4f", y, z }' | tr '.' 'p')
+	    coderun="Arepo_asp${tag}"
+	    if [ ! -x "$dir/$coderun" ]; then
+		echo "Building AREPO with LONG_Y=$LONGY LONG_Z=$LONGZ -> $coderun"
+		cfg="Config_asp${tag}.sh"
+		cp "$dir/Config.sh" "$dir/$cfg"
+		printf "\nLONG_Y=%s\nLONG_Z=%s\n" "$LONGY" "$LONGZ" >> "$dir/$cfg"
+		( cd "$dir" && make -j8 CONFIG="$cfg" BUILD_DIR="build_asp${tag}" EXEC="$coderun" )
+		if [ ! -x "$dir/$coderun" ]; then echo "Error: AREPO LONG build failed."; exit 1; fi
+	    fi
+	    echo "Non-cubic box [$dxP,$dyP,$dzP] -> using $coderun (LONG_Y=$LONGY LONG_Z=$LONGZ)"
+	fi
+
+	# tipsy IC -> AREPO IC (sph_interp). $AREPOICMODE picks the conversion
+	# (default "particles": 1:1 particle->generator copy). Periodic box + dTuFac
+	# come from the .param/.log inside the converter; coords are framed per-axis
+	# into [0,period_axis] so they fit the LONG_Y/LONG_Z box.
+	# --param-out also writes a FRESH AREPO param.txt with run parameters
+	# (timestepping, box, output cadence) derived from the tipsy .param --
+	# replacing the old noh-template sed (MaxSizeTimestep is now dDelta, not 0.01).
+	arepoIC="datafiles/${ICfile}_arepo.hdf5"
+	arepoparam="$runname/param.txt"
+	convertcmd="python ${analysisdir}/ICconvert_tipsytoarepo.py datafiles/$ICfile.00000 $arepoIC $AREPOICMODE --param-out $arepoparam --output-dir $runname/ --boxsize $boxsize"
+	echo "$convertcmd"
+	eval "$convertcmd"
+	if [ $? -ne 0 ]; then echo "Error: AREPO IC conversion failed."; exit 1; fi
+
+	# RestartFlag 0 = start from the IC (AREPO rebuilds the Voronoi mesh).
+	runline=( $mpirun "$dir/${coderun}" "$arepoparam" 0)
     fi
     echo "${runline[@]}"
     "${runline[@]}"
@@ -1108,6 +1179,14 @@ mkdir initruns
     if [ "$4" == 2 ]; then
 	# convert the SPH-EXA hdf5 output back into tipsy snapshots
 	python $current_dir/setupfiles/ICconvert_sphexatotipsy.py $runname/$runname.h5 $runname $iOutInterval
+    fi
+
+    if [ "$4" == 3 ]; then
+	# convert the AREPO snap_*.hdf5 output back into tipsy snapshots so the
+	# analysis pipeline (which reads tipsy) can process the AREPO run. Pass the
+	# tipsy .param so the per-axis periods (non-cubic box) centre the snapshots
+	# correctly and land in the .log.
+	python $current_dir/setupfiles/ICconvert_arepototipsy.py $runname $runname $iOutInterval datafiles/$ICfile.param
     fi
 
 ## Reference (regression baseline): -r saves the analysis result of this run as

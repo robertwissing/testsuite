@@ -1,6 +1,6 @@
 import numpy as np
 
-from glassgen.kernels import dw_wc2, w_wc2
+from glassgen.kernels import W0, dw_wc2, w_wc2
 from glassgen.neighbors import NeighborList
 from glassgen.sph_core import density_loop, get_force_loop
 
@@ -23,7 +23,7 @@ def compute_state(pos, box, nsmooth):
     nb = NeighborList(box, nsmooth)
     idx, h, indptr, indices = nb.update(pos)
     rho = np.empty(n)
-    density_loop(pos, mass, h, idx, box, True, rho)
+    density_loop(pos, mass, h, idx, box, True, rho, W0)
     return mass, idx, h, indptr, indices, rho
 
 

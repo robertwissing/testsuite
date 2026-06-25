@@ -274,34 +274,55 @@ def setcloseddist(D, xmin, xmax, ymin, ymax, zmin, zmax, delta, *, clip_to_rmax=
     return D
 
 def setrandomdist(D,xmin,xmax,ymin,ymax,zmin,zmax,delta):
-        #
-        #--initialise random number generator
-        #
-        iseed = -43587
-        dxbound=xmax-xmin
-        dybound=ymax-ymin
-        dzbound=zmax-zmin
-        xcentre=(xmax+xmin)/2.0
-        ycentre=(ymax+ymin)/2.0
-        zcentre=(zmax+zmin)/2.0
-        nx = int(dxbound/delta)
-        ny = int(dybound/delta)
-        nz = int(dzbound/delta)
-        deltax=delta
+        # Vectorised random fill. The acceptance region (checkboundary) is often
+        # MUCH smaller than the full [xmin,xmax]^3 domain - e.g. a sphere of
+        # radius sqrt(rmax2) << the box - so drawing uniformly over the whole
+        # domain and rejecting wastes ~(domain/region) of the draws, which is
+        # catastrophic when the region is small AND delta is fine (the inner,
+        # dense component). Instead draw inside the TIGHT bounding box of the
+        # region (the domain intersected with [-Rmax, Rmax]^3, Rmax=sqrt(rmax2),
+        # the radius cut checkboundary imposes) at the SAME number density, so
+        # almost nothing is rejected, and apply the boundary test vectorised.
+        dxbound = xmax - xmin
+        dybound = ymax - ymin
+        dzbound = zmax - zmin
+        nx = int(dxbound/delta); ny = int(dybound/delta); nz = int(dzbound/delta)
         npnew = nx*ny*nz
-        ipart = len(D.x)
-        for i in range (0,npnew):
-
-           xi = xmin + np.random.rand()*dxbound
-           yi = ymin + np.random.rand()*dybound
-           zi = zmin + np.random.rand()*dzbound
-        
-           if (checkboundary(D,xi,yi,zi,xcentre,ycentre,zcentre)):
-              D.x.append(xi)
-              D.y.append(yi)
-              D.z.append(zi)
-              ipart=ipart+1
-              D.rho.append(D.getrhoi(ipart-1))
+        if npnew <= 0:
+            return D
+        ndens = npnew / (dxbound*dybound*dzbound)        # ~ 1/delta^3
+        # tight bounding box of the acceptance region (origin-centred radius cut
+        # |coord| < Rmax); Rmax unset/0 -> falls back to the full domain.
+        rmax2 = float(getattr(D, 'rmax2', 0.0))   # may be a huge sentinel int
+        Rmax = np.sqrt(rmax2) if rmax2 > 0 else np.inf
+        gx0 = max(xmin, -Rmax); gx1 = min(xmax, Rmax)
+        gy0 = max(ymin, -Rmax); gy1 = min(ymax, Rmax)
+        gz0 = max(zmin, -Rmax); gz1 = min(zmax, Rmax)
+        gdx = gx1 - gx0; gdy = gy1 - gy0; gdz = gz1 - gz0
+        if gdx <= 0 or gdy <= 0 or gdz <= 0:
+            return D
+        npts = max(1, int(round(ndens*gdx*gdy*gdz)))
+        xi = gx0 + np.random.rand(npts)*gdx
+        yi = gy0 + np.random.rand(npts)*gdy
+        zi = gz0 + np.random.rand(npts)*gdz
+        # vectorised checkboundary (mirrors the scalar version below)
+        x2 = xi*xi; y2 = yi*yi; z2 = zi*zi
+        if D.shape == 1:        # cube / box-shell
+            mask = ((x2 < D.rmax2) & (y2 < D.rmax2) & (z2 < D.rmax2) &
+                    ((D.rmin2 <= x2) | (D.rmin2 <= y2) | (D.rmin2 <= z2)))
+        else:                   # sphere / cylinder
+            rcyl2 = x2 + y2; rr2 = rcyl2 + z2
+            mask = ((D.rmin2 <= rr2) & (rr2 < D.rmax2) &
+                    (D.rcylmin2 <= rcyl2) & (rcyl2 < D.rcylmax2))
+        xs = xi[mask]; ys = yi[mask]; zs = zi[mask]
+        start = len(D.x)
+        D.x.extend(xs.tolist())
+        D.y.extend(ys.tolist())
+        D.z.extend(zs.tolist())
+        # per-particle rho (getrhoi reads D.x[i]/y/z, now populated); only over
+        # the ACCEPTED particles, as before - no longer over the rejected draws.
+        for i in range(start, len(D.x)):
+            D.rho.append(D.getrhoi(i))
         return(D)
 
 def setbound(D,xmin,xmax,ymin,ymax,zmin,zmax):

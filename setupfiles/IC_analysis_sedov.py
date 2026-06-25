@@ -403,15 +403,28 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
         et = ek + eth + (em if magnetic else 0.0)   # total incl. E_mag when MHD
         if hydro_blast:                         # normalize each by its analytic
             yt, yk, yth = et / E0, ek / (f_kin * E0), eth / (f_therm * E0)
+            yem = None
+        elif magnetic:
+            # No analytic -> normalize EVERY component by the initial TOTAL energy
+            # so they share a common, physically-meaningful scale: the total
+            # stays ~1 (conservation check) and each component reads as its
+            # fraction of the budget (E_kin starts at 0, E_mag small, E_th ~1).
+            et0 = et[0] if (np.isfinite(et[0]) and et[0] != 0) else 1.0
+            yt, yk, yth, yem = et / et0, ek / et0, eth / et0, em / et0
         else:
-            yt, yk, yth = et, ek, eth
+            yt, yk, yth, yem = et, ek, eth, None
         style = "-" if source == "log" else "o-"   # dense log -> line
         line, = ax.plot(ts, yt, style, ms=3, label=f"{lab} total")
         c = line.get_color()
         ax.plot(ts, yk, "--", lw=1.2, color=c, alpha=0.8, label="kinetic")
         ax.plot(ts, yth, ":", lw=1.4, color=c, alpha=0.8, label="thermal")
-        if magnetic:                            # no analytic -> raw E_mag
-            ax.plot(ts, em, "-.", lw=1.4, color=c, alpha=0.8, label="magnetic")
+        if magnetic:                            # E_mag / E_tot(0)
+            ax.plot(ts, yem, "-.", lw=1.4, color=c, alpha=0.8, label="magnetic")
+            print(f"sedov[{lab}] energy (/ E_tot(0), t={ts[0]:.4g}): "
+                  f"total {yt[0]:.4g}->{yt[-1]:.4g}  "
+                  f"kinetic {yk[0]:.4g}->{yk[-1]:.4g}  "
+                  f"thermal {yth[0]:.4g}->{yth[-1]:.4g}  "
+                  f"magnetic {yem[0]:.4g}->{yem[-1]:.4g}")
 
         # Relative difference of each energy vs analytic at the comparison time.
         if hydro_blast:
@@ -438,6 +451,11 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
         ax.axhline(1.0, color="k", ls="--", lw=1.2, label="analytic (=1)")
         ax.set_ylabel(r"$E / E_{\rm analytic}$")
         ax.set_title("Sedov energy / analytic vs time (total / kinetic / thermal)")
+    elif magnetic:
+        ax.axhline(1.0, color="k", ls="--", lw=1.2, label="initial total (=1)")
+        ax.set_ylabel(r"$E / E_{\rm tot}(0)$")
+        ax.set_title("Sedov energy / initial total vs time "
+                     "(total / kinetic / thermal / magnetic)")
     else:
         if int(params["select"]) in (1, 2):
             ax.axhline(E0, color="k", ls="--", lw=1.3,
@@ -581,7 +599,7 @@ def plot_mhd_profiles(inputs, labels, t, save=None):
         for ax, q in ((axb, bmag), (axd, derr)):
             ax.scatter(r, q, s=3, alpha=0.25, color=f"C{ci}", rasterized=True,
                        label=(f"{lab} (t={tt:.3g})" if ax is axb else None))
-            cx, qb = _binned(r, q)
+            cx, qb = binned_profile(r, q, percentile=(0.5, 99.5))
             if cx is not None:
                 ax.plot(cx, qb, "-", lw=1.8, color=f"C{ci}")
         any_data = True

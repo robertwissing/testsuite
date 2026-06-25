@@ -133,11 +133,6 @@ class setup_mhdcollapse(object):
          self.npart=len(self.x)
          self.ngas=self.npart
          if distri==1:
-             # random pre-IC to be relaxed against the density table:
-             # equal-mass particles must integrate the *smoothed* sigmoid
-             # profile (not the sharp sphere), or the relaxer cannot reach
-             # rho == rho0 everywhere. The profile is rhoout beyond the
-             # ramp, so integrate the excess radially over the box volume.
              rq = np.linspace(0.0, 0.5*min(self.dxbound, self.dybound,
                                            self.dzbound), 200001)
              totmass = (self.rhoout*self.dxbound*self.dybound*self.dzbound
@@ -179,27 +174,20 @@ class setup_mhdcollapse(object):
          print(hsm,hsm2)
          
          #hsm=(5.0/kpctoau)
-         for i in range(self.npart):
-             radius2 = self.x[i]**2 + self.y[i]**2+self.z[i]**2
-             radvec=(self.x[i],self.y[i],self.z[i])
-             wvec=(0,0,w)
-             velvec=np.cross(wvec,radvec)
-             #velvec in lengthunit/s
-             if (radius2 < self.Rin**2):
-                #self.u.append(self.getP(self.rhoin)/(gam1*self.rhoin))
-                self.vx.append(velvec[0])
-                self.vy.append(velvec[1])
-                self.vz.append(velvec[2])
-             else:
-                #self.u.append(self.getP(self.rhoout)/(gam1*self.rhoout))
-                self.vx.append(0.)
-                self.vy.append(0.)
-                self.vz.append(0.)
-             self.u.append(1.0/self.rho[i])
-             self.Bx.append(0.)
-             self.By.append(0.)
-             self.Bz.append(Bzero)
-             self.h.append(hsm)
+         # vectorised over all particles (was a per-particle loop with a
+         # per-particle np.cross - the dominant cost at high nx). Rigid rotation
+         # about z inside R_in: v = w_vec x r = (-w*y, w*x, 0); zero outside.
+         xa = np.asarray(self.x); ya = np.asarray(self.y); za = np.asarray(self.z)
+         rho_a = np.asarray(self.rho)
+         inside = (xa*xa + ya*ya + za*za) < self.Rin**2
+         self.vx.extend(np.where(inside, -w*ya, 0.0).tolist())
+         self.vy.extend(np.where(inside,  w*xa, 0.0).tolist())
+         self.vz.extend(np.zeros(self.npart).tolist())
+         self.u.extend((1.0/rho_a).tolist())
+         self.Bx.extend([0.0]*self.npart)
+         self.By.extend([0.0]*self.npart)
+         self.Bz.extend([Bzero]*self.npart)
+         self.h.extend([hsm]*self.npart)
         
          
          gtosol = 5.0279933*10**(-34)*self.dmsolunit
@@ -211,7 +199,7 @@ class setup_mhdcollapse(object):
          print(self.getP(self.rhoout)/(gam1*self.rhoout))
         
          
-         print(velvec[0])
+         print(self.vx[0])
          print(0.2*kmtokpc*14877722399232.906)
          print("CLOUD DENSITY g/cm**3 ", self.rhoin*cmtokpc**3/gtosol)
          

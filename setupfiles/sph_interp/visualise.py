@@ -25,9 +25,10 @@ Geometry-aware rendering of the SAME plane for each target:
 
 import numpy as np
 
-# Headless: pick a non-interactive backend before pyplot is imported.
-import matplotlib
-matplotlib.use("Agg")
+# Importing this module must not pin a backend: matplotlib already falls back to
+# a non-interactive backend (Agg) on its own when there is no display, so forcing
+# it here only clobbered an interactive backend (GTK3Agg/Qt5Agg/...) chosen by an
+# analysis script for an X session, silently losing figures at plt.show().
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, Normalize
 

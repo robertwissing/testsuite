@@ -11,6 +11,7 @@ import numpy as np
 
 from .ball import BallNeighborList
 from .density import DensityField
+from .kernels import W0, wzero_wc2
 from .neighbors import NeighborList, _gather3, cell_order
 from .sph_core import (density_loop, density_loop_csr, get_force_loop,
                        get_force_loop_csr)
@@ -69,8 +70,10 @@ def relax(pos, mass, density, box=None, nsmooth=64,
           flavour='gdforce', rhopow=2.0,
           icr0=1.0, icrloop0=0.5, icr0rate=1.5, max_iter=4800,
           margin=8, reorder=True, one_sided=False,
-          hmode='knn', nsmoothmin=32, confine=False,
-          reanneal=True, momentum=0.0, icr0_stop=3e-3, stop_window=10,
+          hmode='knn', nsmoothmin=32, self_bias=True,
+          confine=False, max_step_frac=None,
+          cap_mode='h', reanneal=True, momentum=0.0, icr0_stop=3e-3,
+          stop_window=10,
           polish_iter=0, diagnostics=False,
           callback=None, callback_every=100, verbose=False):
     """Relax particles into a glass matching a target density field.
@@ -141,6 +144,9 @@ def relax(pos, mass, density, box=None, nsmooth=64,
     if nsmoothmin >= nsmooth:
         nsmoothmin = nsmooth - 1
     hfact3 = 3.0 * nsmooth / (32.0 * np.pi)
+    # self-density bias correction: scale the W(0) self term so a uniform glass
+    # relaxes to rho -> ~1.0 (gasoline smf->Wzero10). self_bias=False -> bare W0.
+    w0self = W0 * wzero_wc2(nsmooth) if self_bias else W0
     pos = np.array(pos, dtype=np.float64)
     mass = np.ascontiguousarray(mass, dtype=np.float64)
     if not isinstance(density, DensityField):
@@ -196,7 +202,29 @@ def relax(pos, mass, density, box=None, nsmooth=64,
     ctrl = StepController(icr0, icrloop0, icr0rate, nsmooth,
                           box=(None if confine else boxarr), reanneal=reanneal)
     dummybox = boxarr if periodic else np.ones(3)
-    max_step_frac = 1.0 if confine else 0.0
+    # The per-step move cap (apply_step clamps each component to max_step_frac*h)
+    # is normally tied to confine: confine -> cap at 1*h, else no cap. They are
+    # decoupled here so an experiment can keep confine's box=None controller
+    # (icr0 stays in units of h, starting at ~icr0*h with no box amplification)
+    # while DISABLING the cap (max_step_frac=0.0): pure steepest descent then
+    # still moves <= icr0*h <= 1*h, so only the momentum term can push a particle
+    # above one smoothing length. max_step_frac=None = follow confine (default).
+    if max_step_frac is None:
+        max_step_frac = 1.0 if confine else 0.0
+    # cap_mode chooses what the cap is a fraction OF:
+    #   'h'    : cap = max_step_frac * h        (fixed length, the original).
+    #            Only binds while icr0/(1-momentum) > max_step_frac, i.e. the
+    #            first few iters before icr0 anneals - inert thereafter.
+    #   'icr0' : cap = max_step_frac * icr0 * h (a fraction of the CURRENT
+    #            max-force step icr0*h). Since the move is d*icr0*h with the
+    #            heavy-ball direction |d| <= 1/(1-momentum), this caps |d| at
+    #            max_step_frac directly - an icr0-INDEPENDENT bound on how far
+    #            momentum may amplify the step, consistent across the whole run.
+    #            max_step_frac=1 => no particle exceeds the max-force step icr0*h
+    #            (momentum can push a particle UP TO that step but not past it).
+    if cap_mode not in ('h', 'icr0'):
+        raise ValueError(f"cap_mode must be 'h' or 'icr0', got {cap_mode!r}")
+    cap_icr0 = cap_mode == 'icr0'
 
     # finish criterion (all gated to the polish phase):
     #   icr0_stop (default 3e-3) : stop when the median-smoothed icr0 (the max
@@ -277,7 +305,7 @@ def relax(pos, mass, density, box=None, nsmooth=64,
             tprof['nbr'] += pc() - t
             t = pc()
             density_loop_csr(pos, mass, hforce, indptr, indices, dummybox,
-                             periodic, rho)
+                             periodic, rho, w0self)
             tprof['dens'] += pc() - t
             t = pc()
             if hmode != 'target':
@@ -306,7 +334,7 @@ def relax(pos, mass, density, box=None, nsmooth=64,
             idx, h, rev_indptr, rev_indices = nblist.update(pos)
             tprof['nbr'] += pc() - t
             t = pc()
-            density_loop(pos, mass, h, idx, dummybox, periodic, rho)
+            density_loop(pos, mass, h, idx, dummybox, periodic, rho, w0self)
             tprof['dens'] += pc() - t
             t = pc()
             rho0 = density.rho0(pos)
@@ -346,8 +374,13 @@ def relax(pos, mass, density, box=None, nsmooth=64,
         tprof['step'] += pc() - t
 
         t = pc()
+        # cap argument: in 'icr0' mode the cap is a fraction of the current
+        # max-force step (icr0*h), so fold icr0 into the fraction passed to
+        # apply_step (which still computes cap = arg*h) - no kernel change. The
+        # move itself already scales by icr0, so this caps |d| at max_step_frac.
+        cap_arg = max_step_frac * ctrl.icr0 if cap_icr0 else max_step_frac
         max_step = apply_step(pos, icvel, hforce, ctrl.icr0, dummybox,
-                              periodic, pdisp, max_step_frac, disp_prev,
+                              periodic, pdisp, cap_arg, disp_prev,
                               momentum)
         (ballnl if use_ball else nblist).record_move(max_step)
         tprof['move'] += pc() - t
@@ -396,10 +429,10 @@ def relax(pos, mass, density, box=None, nsmooth=64,
             h_in = np.cbrt(mass * hfact3 / rho)
         indptr, indices, hret, _, _ = ballnl.update(pos, h_in)
         density_loop_csr(pos, mass, hret, indptr, indices, dummybox,
-                         periodic, rho)
+                         periodic, rho, w0self)
     else:
         idx, h, rev_indptr, rev_indices = nblist.update(pos)
-        density_loop(pos, mass, h, idx, dummybox, periodic, rho)
+        density_loop(pos, mass, h, idx, dummybox, periodic, rho, w0self)
         hret = h   # kNN-gather path is hmode='knn' only
     if verbose:
         tot = sum(tprof.values()) or 1.0

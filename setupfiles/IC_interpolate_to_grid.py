@@ -98,8 +98,8 @@ def interactive(args):
     default_fmt = {"uniform": "npz", "amr": "ramses", "voronoi": "npz",
                    "projection": "npz"}[args.grid]
     args.output_format = _ask("Output format", default=default_fmt,
-                              choices=["npz", "hdf5", "ramses", "cell-table",
-                                       "native"])
+                              choices=["npz", "hdf5", "ramses", "arepo",
+                                       "cell-table", "native"])
     args.output = _ask("Output file")
     if _ask("Write a SPH-vs-grid diagnostic figure?", default="y",
             choices=["y", "n"]) == "y":
@@ -259,6 +259,13 @@ def write_output(res, path, fmt, args, p):
         return to_ramses(res, path, hydro_fields=tuple(hydro),
                          gamma=args.gamma, boxlen=args.boxlen, fmt=rfmt)
 
+    if fmt == "arepo":
+        from sph_interp import to_arepo
+        abox = (np.repeat(args.boxlen, 3) if args.boxlen is not None else p.box)
+        aper = bool(np.any(np.atleast_1d(p.periodic)))
+        print(f"  writing AREPO moving-mesh IC -> {path}")
+        return to_arepo(res, path, tu_fac=args.tu_fac, box=abox, periodic=aper)
+
     if fmt == "cell-table":
         from sph_interp import to_cell_table
         table = to_cell_table(res)
@@ -331,8 +338,10 @@ def build_parser():
     pa.add_argument("--fields", default="rho",
                     help="comma list of fields to interpolate (rho,Bmag,vx,...)")
     pa.add_argument("--output-format",
-                    choices=["npz", "hdf5", "ramses", "cell-table", "native"],
-                    default=None, help="default: npz (ramses for --grid amr)")
+                    choices=["npz", "hdf5", "ramses", "arepo", "cell-table",
+                             "native"],
+                    default=None, help="default: npz (ramses for --grid amr). "
+                    "arepo=moving-mesh IC (cell centres -> generators).")
 
     # snapshot / domain
     pa.add_argument("--nsmooth", type=int, default=64,
@@ -397,6 +406,19 @@ def build_parser():
                          "intersected with --fields)")
     pa.add_argument("--gamma", type=float, default=5.0 / 3.0)
     pa.add_argument("--boxlen", type=float, default=None)
+
+    # arepo
+    pa.add_argument("--voronoi-particles", action="store_true",
+                    help="AREPO output only: write the SPH particles DIRECTLY as "
+                         "generators (1:1 copy of mass + v/u/B, no interpolation; "
+                         "AREPO tessellates). The most faithful conversion. "
+                         "Without this, --output-format arepo deposits onto the "
+                         "chosen --grid first.")
+    pa.add_argument("--tu-fac", type=float, default=None,
+                    help="dTuFac for the AREPO IC: specific internal energy "
+                         "u = dTuFac * T (tipsy stores temperature). Default: "
+                         "read dTuFac from the run .log (read_tufac); pass a "
+                         "value to override.")
     return pa
 
 
@@ -416,12 +438,49 @@ def main(argv=None):
     from sph_interp import from_tipsy, interpolate
 
     fields = tuple(f.strip() for f in args.fields.split(",") if f.strip())
+
+    # AREPO ICs need a temperature field (u = dTuFac*T) -> auto-include one, and
+    # resolve dTuFac from the run .log unless the user gave --tu-fac.
+    if args.output_format == "arepo":
+        from sph_interp.export import AREPO_TEMPERATURE
+        if not any(f.lower() in AREPO_TEMPERATURE for f in fields):
+            fields = fields + ("temp",)
+            print("  (arepo) added 'temp' to fields for internal energy")
+        if args.tu_fac is None:
+            # Prefer the .param unit system (authoritative for an IC we generated;
+            # the IC writer stored temperature = u/dTuFac but writes no dGasConst
+            # line, so the .log path defaults to a wrong 1.0). Fall back to the
+            # run .log, else 1.0.
+            from sph_interp.particles import read_param_tufac
+            tf = read_param_tufac(args.input)
+            if tf is not None:
+                args.tu_fac = tf
+                print(f"  (arepo) dTuFac from .param units: {args.tu_fac:g} "
+                      "(override with --tu-fac)")
+            else:
+                from IC_analysis_general import read_tufac
+                args.tu_fac = read_tufac(args.input)
+                print(f"  (arepo) dTuFac from run .log: {args.tu_fac:g} "
+                      "(override with --tu-fac)")
+
     print(f"reading {args.input}  fields={fields}")
     box = (np.repeat(args.box, 3) if args.box is not None else None)
     p = from_tipsy(args.input, fields=fields, nsmooth=args.nsmooth,
                    periodic=args.periodic, box=box)
     print(f"  {p.n} gas particles, box {np.round(p.box, 4)}, "
           f"periodic={p.periodic}")
+
+    # AREPO copy path: write the particles straight to a moving-mesh IC, no
+    # tessellation / deposit on our side (AREPO builds the Voronoi mesh).
+    if args.voronoi_particles:
+        if args.output_format != "arepo":
+            pa.error("--voronoi-particles only applies to --output-format arepo")
+        from sph_interp import particles_to_arepo
+        abox = (np.repeat(args.boxlen, 3) if args.boxlen is not None else p.box)
+        print("  AREPO copy path: particles -> generators (no interpolation)")
+        particles_to_arepo(p, args.output, tu_fac=args.tu_fac, box=abox)
+        print("done.")
+        return
 
     target = build_target(args, p)
     print(f"  depositing with method={args.method} ...")

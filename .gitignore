@@ -1,0 +1,13 @@
+# Local working notes (kept on disk, not in the repo)
+setupfiles/ANALYSIS_FRAMEWORK_PLAN.md
+
+# Python bytecode
+*.pyc
+__pycache__/
+
+# Editor backups / swap files
+*~
+*.swp
+
+# Build products (icgenerator/gasoline)
+*.o

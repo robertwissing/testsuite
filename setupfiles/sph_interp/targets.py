@@ -11,7 +11,141 @@ grid), `AMRGrid` (octree-refined cubic cells over a base grid), and `VoronoiGrid
 """
 
 from dataclasses import dataclass
+import os
+import contextlib
+import subprocess
+import tempfile
 import numpy as np
+import numba
+
+try:                                  # optional fast parallel mesher (OpenMP voro++)
+    import multivoro as _multivoro
+    _HAS_MULTIVORO = True
+except Exception:                     # pragma: no cover - optional dependency
+    _multivoro = None
+    _HAS_MULTIVORO = False
+
+# optional distributed mesher (MadVoro, MPI/serial) — used via a shell-out driver
+# compiled in _madvoro/ (no Python binding; see _madvoro/README.md). The driver
+# is a subprocess so a mesher crash on pathological input cannot take down the
+# interpreter (a deliberate robustness win over an in-process binding).
+_MADVORO_DRIVER = os.path.join(os.path.dirname(__file__), "_madvoro", "madvoro_driver")
+_HAS_MADVORO = os.path.isfile(_MADVORO_DRIVER) and os.access(_MADVORO_DRIVER, os.X_OK)
+
+# optional AREPO Voronoi mesher (codes/arepo) — also a shell-out (write HDF5 snapshot
+# -> run `Arepo param.txt 14` mesh-dump -> parse), in _arepo/arepo_mesh.py. AREPO is
+# the reference moving-mesh code; it tessellates collapsed high-dynamic-range cores
+# robustly and ~7.5x faster than serial madvoro on them. See `arepo-mesh-backend`.
+try:
+    from ._arepo import arepo_mesh as _arepo_mesh
+    _HAS_AREPO = _arepo_mesh.has_arepo()
+except Exception:                     # pragma: no cover - optional dependency
+    _arepo_mesh = None
+    _HAS_AREPO = False
+
+_DEFAULT_THREADS = os.cpu_count() or 1
+
+# De-sliver floor as a fraction of the median nearest-neighbour spacing, PER
+# MESHER. multivoro (parallel voro++) needs ~4x pyvoro's floor on a collapsed,
+# high-dynamic-range core: its independent per-cell search loses completeness when
+# the local spacing collapses abruptly, so cells are UNDER-CUT and OVERLAP (mass
+# error +2260% / 100% core overlap at frac 0.05, vs pyvoro's graceful +0.21%).
+# A larger floor pulls the core dynamic range back into the regime multivoro can
+# resolve. Serial pyvoro keeps voro++'s completeness guarantee, so 0.05 (just
+# enough to clear true slivers) conserves. See `multivoro-dynamic-range-defect`.
+# madvoro starts at 0.0 (de-sliver OFF) deliberately: an open question whether its
+# distributed Delaunay handles the collapsed high-dynamic-range core natively or
+# breaks like multivoro. Measure first, then set the floor from data.
+# arepo at 0.0: AREPO's Delaunay/Voronoi handles the collapsed high-dynamic-range
+# core natively (its native regime), like madvoro -- no de-sliver needed; the
+# ConvexHull reconstruction is exact on the resulting cells. Measured below.
+_DESLIVER_FRAC = {"pyvoro": 0.05, "multivoro": 0.20, "madvoro": 0.0, "arepo": 0.0}
+
+
+def _resolve_backend(backend):
+
+    if backend == "arepo":
+        return "arepo"
+    if backend == "auto":
+        return "multivoro"
+    if backend == "multivoro" or (backend == "auto" and _HAS_MULTIVORO):
+        return "multivoro"
+    return "pyvoro"
+
+
+@numba.njit(cache=True)
+def _mv_flatten(VV, vstart, FF, fstart, genx, geny, genz):
+    """Build the Voronoi CSR (cf_start, fv_start, fvx/fvy/fvz, volume, cell_rad)
+    from multivoro's concatenated per-cell vertices (VV, offsets vstart) and flat
+    face-vertex runs (FF = [k, local_ids..k, ...] per cell, offsets fstart). Face
+    vertex indices are LOCAL to the cell. Volume = signed tets fanned from the
+    generator; degenerate faces (k<3) skipped. The hot inner loop, in numba."""
+    N = vstart.shape[0] - 1
+    nface = 0
+    nfv = 0
+    for c in range(N):                          # pass 1: count faces (k>=3) + verts
+        i = fstart[c]; end = fstart[c + 1]
+        while i < end:
+            k = FF[i]; i += 1 + k
+            if k >= 3:
+                nface += 1; nfv += k
+    cf_start = np.zeros(N + 1, np.int64)
+    fv_start = np.zeros(nface + 1, np.int64)
+    fvx = np.empty(nfv); fvy = np.empty(nfv); fvz = np.empty(nfv)
+    volume = np.empty(N); cell_rad = np.empty(N)
+    fidx = 0; vptr = 0
+    for c in range(N):                          # pass 2: fill
+        gx = genx[c]; gy = geny[c]; gz = genz[c]
+        vs = vstart[c]; nv = vstart[c + 1] - vs
+        rmax = 0.0
+        for j in range(nv):
+            dx = VV[vs + j, 0] - gx; dy = VV[vs + j, 1] - gy; dz = VV[vs + j, 2] - gz
+            d = dx * dx + dy * dy + dz * dz
+            if d > rmax:
+                rmax = d
+        cell_rad[c] = rmax ** 0.5
+        vol6 = 0.0
+        i = fstart[c]; end = fstart[c + 1]
+        while i < end:
+            k = FF[i]; base = i + 1; i += 1 + k
+            if k < 3:
+                continue
+            for t in range(k):
+                gi = vs + FF[base + t]
+                fvx[vptr] = VV[gi, 0]; fvy[vptr] = VV[gi, 1]; fvz[vptr] = VV[gi, 2]
+                vptr += 1
+            fidx += 1
+            fv_start[fidx] = vptr
+            i0 = vs + FF[base]
+            a0x = VV[i0, 0] - gx; a0y = VV[i0, 1] - gy; a0z = VV[i0, 2] - gz
+            for t in range(1, k - 1):
+                i1 = vs + FF[base + t]; i2 = vs + FF[base + t + 1]
+                a1x = VV[i1, 0] - gx; a1y = VV[i1, 1] - gy; a1z = VV[i1, 2] - gz
+                a2x = VV[i2, 0] - gx; a2y = VV[i2, 1] - gy; a2z = VV[i2, 2] - gz
+                vol6 += (a0x * (a1y * a2z - a1z * a2y)
+                         - a0y * (a1x * a2z - a1z * a2x)
+                         + a0z * (a1x * a2y - a1y * a2x))
+        volume[c] = abs(vol6) / 6.0
+        cf_start[c + 1] = fidx
+    return cf_start, fv_start, fvx, fvy, fvz, volume, cell_rad
+
+
+@contextlib.contextmanager
+def _silence_cstd():
+    """Mute C-level stdout+stderr (voro++ prints 'Order 4 vertex memory scaled
+    up...' progress noise per cell) for the duration of the block."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = (os.dup(1), os.dup(2))
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        os.close(devnull)
+        os.close(saved[0])
+        os.close(saved[1])
 
 
 @dataclass
@@ -416,10 +550,82 @@ class VoronoiGrid:
         per-axis edge array. Returns the flat face/vertex CSR instead."""
         return self.cf_start, self.fv_start, self.fvx, self.fvy, self.fvz
 
+    @staticmethod
+    def _median_nn(pts):
+        """Median nearest-neighbour distance of the generators — a robust local
+        resolution scale for the de-sliver floor. Preferred over the mean spacing
+        (domain_vol/N)**(1/3) because that is inflated by empty volume on a
+        CONCENTRATED system (a galaxy/merger with a dense disk in a large empty
+        halo), where it overshoots the real spacing ~100x and the floor would
+        merge away genuine structure. The median NN distance instead tracks the
+        typical spacing of where the generators actually are. Ignores exact
+        duplicates (NN==0) so a handful of coincident points don't drag it to 0."""
+        from sklearn.neighbors import BallTree
+        n = pts.shape[0]
+        if n < 2:
+            return 0.0
+        d, _ = BallTree(pts).query(pts, k=2)
+        nn = d[:, 1]
+        pos = nn[nn > 0.0]
+        if pos.size == 0:
+            return 0.0
+        return float(np.median(pos))
+
+    @staticmethod
+    def _merge_close(pts, tol):
+        """Collapse near-coincident generators (sub-`tol` clusters) into one
+        point at their centroid, so voro++ does not have to cut degenerate sliver
+        faces between them. Returns `(newpts, nmerged)`.
+
+        WHY: on a collapsed core (high dynamic range) the densest particles sit
+        at separations << the smoothing length. pyvoro/voro++ cannot tessellate
+        such near-coincident generators cleanly — the bisecting faces are
+        ill-conditioned and the stored polyhedra develop local GAPS and OVERLAPS
+        (they no longer partition space). The signed-tet integrator is exact on
+        well-formed cells, so a broken partition is the sole remaining source of
+        the Voronoi Petkova conservation error (~0.2% on mhdcollapse). Merging the
+        coincident generators removes the slivers and restores Sum frac = 1.
+        Connected components are merged transitively (union-find over all pairs
+        within `tol`), so a tight chain collapses to a single representative."""
+        from scipy.spatial import cKDTree
+        n = pts.shape[0]
+        if tol <= 0.0 or n < 2:
+            return pts, 0
+        pairs = cKDTree(pts).query_pairs(tol, output_type='ndarray')
+        if len(pairs) == 0:
+            return pts, 0
+        parent = np.arange(n)
+
+        def find(a):
+            root = a
+            while parent[root] != root:
+                root = parent[root]
+            while parent[a] != root:           # path compression
+                parent[a], a = root, parent[a]
+            return root
+
+        for a, b in pairs:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+        roots = np.array([find(i) for i in range(n)], dtype=np.int64)
+        _, inv = np.unique(roots, return_inverse=True)
+        m = inv.max() + 1
+        newpts = np.zeros((m, 3))
+        np.add.at(newpts, inv, pts)
+        newpts /= np.bincount(inv, minlength=m)[:, None]
+        return np.ascontiguousarray(newpts), n - m
+
     @classmethod
     def from_points(cls, points, bounds=None, periodic=False, dispersion=None,
-                    ghost_pad=0.25):
-        """Tessellate `points` (Ncell,3) into Voronoi cells via pyvoro.
+                    ghost_pad=0.25, merge_tol=None, backend="auto", n_threads=-1):
+        """Tessellate `points` (Ncell,3) into Voronoi cells.
+
+        backend    : mesher — 'auto' (multivoro if installed for parallel OpenMP
+                     voro++, else pyvoro), 'multivoro', or 'pyvoro'. multivoro is
+                     ~2x faster single-threaded and up to ~40x with threads, and is
+                     the default when available; identical cells out.
+        n_threads  : multivoro thread count; <=0 -> all cores.
 
         bounds     : [[xlo,xhi],[ylo,yhi],[zlo,zhi]] domain (default: padded
                      point extent). pyvoro requires every point strictly inside.
@@ -444,8 +650,32 @@ class VoronoiGrid:
                      their boundary cells correctly (otherwise Sum cell vol > box
                      vol, e.g. +5% at N=32). 0.25 already covers dense/near-
                      uniform meshes; raise it only for strongly clustered ones.
+        merge_tol  : collapse generators closer than this distance into one (see
+                     `_merge_close`) BEFORE tessellating, to keep voro++ from
+                     emitting degenerate sliver cells (or failing outright on exact
+                     duplicates) on a high-dynamic-range core. Default None -> a
+                     BACKEND-AWARE fraction of the MEDIAN nearest-neighbour distance
+                     (`_median_nn` x `_DESLIVER_FRAC`): 5% for pyvoro, 20% for
+                     multivoro (whose parallel solver under-cuts/overlaps core cells
+                     under abrupt-spacing dynamic range and so needs the spacing
+                     pulled up further). An absolute resolution floor that bites only
+                     near-coincident generators and is a no-op on well-resolved
+                     meshes. The larger multivoro floor merges ~10% more core cells,
+                     which caps the very densest cell's peak density (the volume-
+                     weighted field PDF is unchanged); set merge_tol explicitly to
+                     override. NOTE: a
+                     LOCAL/relative floor cannot work here: the slivers form exactly
+                     where the local spacing collapses, so a local threshold shrinks
+                     with it and never reaches them (and merging them unevenly makes
+                     voro++ fail) — the floor must be absolute. median-NN (not the
+                     mean spacing (vol/N)**(1/3)) keeps it robust on CONCENTRATED
+                     systems where empty volume inflates the mean ~100x. 0 disables
+                     the sliver de-merge but EXACT/near-coincident generators are
+                     STILL collapsed (an unconditional ~1e-9*span floor) so voro++
+                     never crashes on duplicates. NOTE: merging means Ncell may be
+                     < N (the core is represented by fewer cells); intended — those
+                     were duplicate sample points.
         """
-        import pyvoro
         pts = np.ascontiguousarray(np.asarray(points, dtype=np.float64).reshape(-1, 3))
         N = pts.shape[0]
         if N == 0:
@@ -464,25 +694,41 @@ class VoronoiGrid:
         else:
             per = [bool(x) for x in per]
 
+        # EXACT/near-coincident generators are ALWAYS collapsed, independent of
+        # merge_tol (incl. merge_tol=0): two generators voro++ cannot tell apart
+        # have no valid distinct cells and make it FAIL outright ("number of cells
+        # found was not equal to the number of particles"). This floor sits ~1e-9
+        # of the domain span -- ~1e3x above voro++'s internal ~1e-12 relative
+        # tolerance, far below any real spacing -- so it removes only true
+        # duplicates, never structure. (merge_tol=0 thus still BUILDS on data with
+        # duplicates; it only switches off the larger sliver de-merge below.)
+        tol_dup = 1e-9 * float(np.max(hi - lo))
+        # de-sliver: merge near-coincident generators so the mesh stays a clean
+        # partition (the collapsed-core conservation fix). Default is a BACKEND-
+        # AWARE fraction of median-NN: multivoro needs ~4x pyvoro's floor (its
+        # parallel solver under-cuts/overlaps cells on an abrupt-spacing core where
+        # serial pyvoro stays valid) -- see `_DESLIVER_FRAC`.
+        if merge_tol is None:
+            merge_tol = _DESLIVER_FRAC[_resolve_backend(backend)] * cls._median_nn(pts)
+        tol_eff = max(float(merge_tol), tol_dup)
+        if tol_eff > 0.0:
+            pts, _ = cls._merge_close(pts, tol_eff)
+            N = pts.shape[0]
+
         if any(per):
             return cls._from_points_periodic(pts, lo, hi, per, dispersion,
-                                             ghost_pad)
+                                             ghost_pad, backend, n_threads)
 
-        limits = [[lo[a], hi[a]] for a in range(3)]
-        if dispersion is None:
-            dispersion = float((np.prod(hi - lo) / N) ** (1.0 / 3.0))
-        cells = pyvoro.compute_voronoi(pts.tolist(), limits, dispersion,
-                                       radii=[], periodic=per)
-        return cls._from_pyvoro(cells, lo, hi, per)
+        return cls._tessellate(pts, lo, hi, lo, hi, dispersion, backend, n_threads)
 
     @classmethod
-    def _from_points_periodic(cls, pts, lo, hi, per, dispersion, ghost_pad):
+    def _from_points_periodic(cls, pts, lo, hi, per, dispersion, ghost_pad,
+                              backend="auto", n_threads=-1):
         """Periodic Voronoi by GHOST IMAGES: replicate near-boundary generators
         into their periodic images, tessellate the lot non-periodically over a
         padded box, keep the N central cells as the real (periodic) cells and the
         images as ghosts (`cell_parent` -> central index). The central cells are
         complete and exact, and tile EXACTLY one period (Sum volume = box vol)."""
-        import pyvoro
         N = pts.shape[0]
         L = hi - lo
         # image shell half-width. The shell MUST span the Voronoi-neighbour reach
@@ -514,27 +760,27 @@ class VoronoiGrid:
                         parents.append(np.where(keep)[0].astype(np.int64))
         gen_all = np.ascontiguousarray(np.concatenate(gens, axis=0))
         parent_all = np.concatenate(parents)
-        ntot = gen_all.shape[0]
         plo = lo - margin; phi = hi + margin
-        limits = [[plo[a], phi[a]] for a in range(3)]
-        if dispersion is None:
-            dispersion = float((np.prod(phi - plo) / ntot) ** (1.0 / 3.0))
-        cells = pyvoro.compute_voronoi(gen_all.tolist(), limits, dispersion,
-                                       radii=[], periodic=[False, False, False])
-        vg = cls._from_pyvoro(cells, lo, hi, per)        # lo/hi = the PHYSICAL box
+        # tessellate the padded ghosted set; store the grid on the PHYSICAL box.
+        vg = cls._tessellate(gen_all, plo, phi, lo, hi, dispersion,
+                             backend, n_threads)
+        vg.periodic = tuple(bool(x) for x in per)
         vg.cell_parent = np.ascontiguousarray(parent_all, dtype=np.int64)
         vg.ncentral = N
         return vg
 
     @classmethod
     def from_particles(cls, particles, bounds=None, periodic=None, dispersion=None,
-                       ghost_pad=0.25):
+                       ghost_pad=0.25, merge_tol=None, backend="auto", n_threads=-1):
         """Tessellate the particle positions themselves into Voronoi cells.
 
         bounds default to the particle box (centered) when known, else the padded
         particle extent; periodic defaults to particles.periodic. For a periodic
         box the bounds ARE the period (no edge padding — ghost images handle the
         boundary), so Sum cell volume = box volume exactly.
+
+        merge_tol forwards to `from_points` (de-sliver coincident particles on a
+        collapsed core; default a backend-aware fraction of median-NN, 0 to disable).
         """
         pos = np.ascontiguousarray(particles.pos, dtype=np.float64)
         if periodic is None:
@@ -550,7 +796,9 @@ class VoronoiGrid:
                 hi = np.maximum(half, phi) + 1e-6
                 bounds = [[lo[a], hi[a]] for a in range(3)]
         return cls.from_points(pos, bounds=bounds, periodic=periodic,
-                               dispersion=dispersion, ghost_pad=ghost_pad)
+                               dispersion=dispersion, ghost_pad=ghost_pad,
+                               merge_tol=merge_tol, backend=backend,
+                               n_threads=n_threads)
 
     @staticmethod
     def _from_pyvoro(cells, lo, hi, periodic):
@@ -584,6 +832,173 @@ class VoronoiGrid:
             fv_start=np.asarray(fv_start_list, dtype=np.int64),
             fvx=np.asarray(fvx), fvy=np.asarray(fvy), fvz=np.asarray(fvz),
             lo=lo, hi=hi, periodic=periodic)
+
+    @staticmethod
+    def _from_multivoro(cells, pts, lo, hi, periodic):
+        """Flatten a multivoro result into the CSR arrays. multivoro returns a
+        list of `Cell` (get_vertices/get_face_vertices/get_neighbors) in INPUT
+        ORDER, but gives neither the generator nor the cell volume — so the
+        generator is the input point and the volume is computed here from the
+        polyhedron faces (signed tets fanned from the generator). `get_face_
+        vertices()` is a flat list [k0, v..(k0), k1, v..(k1), ...] of per-face
+        vertex-index runs. The signed-tet Petkova integrator re-derives face
+        orientation from the generator, so the face winding need not match
+        pyvoro's."""
+        N = len(cells)
+        gen = np.ascontiguousarray(np.asarray(pts, dtype=np.float64)[:N])
+        # Collect the per-cell vertices/faces via the (fast) nanobind accessors,
+        # concatenated with offsets, then do the CSR assembly + volume in numba
+        # (the per-vertex/per-tet work is the cost; the accessors are ~0.1s/40k).
+        vlist = [None] * N
+        flist = [None] * N
+        vcounts = np.empty(N, dtype=np.int64)
+        fcounts = np.empty(N, dtype=np.int64)
+        for c in range(N):
+            cell = cells[c]
+            v = np.ascontiguousarray(cell.get_vertices(), dtype=np.float64)
+            f = np.ascontiguousarray(cell.get_face_vertices(), dtype=np.int64)
+            vlist[c] = v; flist[c] = f
+            vcounts[c] = v.shape[0]; fcounts[c] = f.shape[0]
+        VV = (np.concatenate(vlist, axis=0) if N else np.zeros((0, 3)))
+        FF = (np.concatenate(flist) if N else np.zeros(0, dtype=np.int64))
+        vstart = np.zeros(N + 1, dtype=np.int64); vstart[1:] = np.cumsum(vcounts)
+        fstart = np.zeros(N + 1, dtype=np.int64); fstart[1:] = np.cumsum(fcounts)
+        cf_start, fv_start, fvx, fvy, fvz, volume, cell_rad = _mv_flatten(
+            VV, vstart, FF, fstart,
+            np.ascontiguousarray(gen[:, 0]), np.ascontiguousarray(gen[:, 1]),
+            np.ascontiguousarray(gen[:, 2]))
+        return VoronoiGrid(
+            gen=gen, volume=volume, cell_rad=cell_rad, cf_start=cf_start,
+            fv_start=fv_start, fvx=fvx, fvy=fvy, fvz=fvz,
+            lo=lo, hi=hi, periodic=periodic)
+
+    @classmethod
+    def _from_madvoro(cls, pts, dom_lo, dom_hi, grid_lo, grid_hi, periodic,
+                      n_threads):
+        """Tessellate via the MadVoro shell-out driver (subprocess: a mesher crash
+        on pathological input is isolated from the interpreter). Writes points +
+        box to a binary temp file, runs the driver, reads back the per-cell CSR.
+        The driver outputs ABSOLUTE inlined face vertices + per-cell volume and
+        circumradius (so the assembly here is just cumsums -- no per-cell Python
+        loop, fast at 1e6 cells). See `_madvoro/madvoro_driver.cpp`.
+
+        n_threads >1 launches `mpirun -np n_threads` (needs the MPI-built driver,
+        `MPICXX=mpicxx bash _madvoro/build.sh`); otherwise runs the driver serially."""
+        if not _HAS_MADVORO:
+            raise RuntimeError(
+                "backend='madvoro' needs the compiled driver at %s -- build it "
+                "with `bash setupfiles/sph_interp/_madvoro/build.sh`" % _MADVORO_DRIVER)
+        pts = np.ascontiguousarray(np.asarray(pts, dtype=np.float64).reshape(-1, 3))
+        N = pts.shape[0]
+        box = np.array([dom_lo[0], dom_lo[1], dom_lo[2],
+                        dom_hi[0], dom_hi[1], dom_hi[2]], dtype=np.float64)
+        with tempfile.TemporaryDirectory() as td:
+            fin = os.path.join(td, "in.bin")
+            fout = os.path.join(td, "out.bin")
+            with open(fin, "wb") as f:
+                np.array([N], dtype=np.int64).tofile(f)
+                box.tofile(f)
+                pts.tofile(f)
+            cmd = [_MADVORO_DRIVER, fin, fout]
+            if n_threads and n_threads > 1:
+                cmd = ["mpirun", "-np", str(int(n_threads))] + cmd
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0 or not os.path.isfile(fout):
+                raise RuntimeError("madvoro driver failed (rc=%d): %s"
+                                   % (r.returncode, r.stderr[-500:]))
+            # the manifest holds the rank count; each rank wrote `${out}.${rank}`
+            # with its disjoint subset of cells -> read and concatenate them (every
+            # cell/face self-describes its counts + inlines absolute coords, so the
+            # CSR concatenates with no re-indexing; cumsums are built below).
+            with open(fout, "rb") as f:
+                nranks = int(np.fromfile(f, dtype=np.int64, count=1)[0])
+            gens_l, vol_l, crad_l, nface_l, nvert_l, fvxyz_l = [], [], [], [], [], []
+            for rk in range(nranks):
+                with open(fout + "." + str(rk), "rb") as f:
+                    nc, tf, tv = np.fromfile(f, dtype=np.int64, count=3)
+                    gens_l.append(np.fromfile(f, dtype=np.float64, count=nc * 3).reshape(nc, 3))
+                    vol_l.append(np.fromfile(f, dtype=np.float64, count=nc))
+                    crad_l.append(np.fromfile(f, dtype=np.float64, count=nc))
+                    nface_l.append(np.fromfile(f, dtype=np.int64, count=nc))
+                    nvert_l.append(np.fromfile(f, dtype=np.int64, count=tf))
+                    fvxyz_l.append(np.fromfile(f, dtype=np.float64, count=tv * 3).reshape(tv, 3))
+        gen = np.concatenate(gens_l, axis=0) if gens_l else np.zeros((0, 3))
+        volume = np.concatenate(vol_l) if vol_l else np.zeros(0)
+        cell_rad = np.concatenate(crad_l) if crad_l else np.zeros(0)
+        nface = np.concatenate(nface_l) if nface_l else np.zeros(0, np.int64)
+        nvert = np.concatenate(nvert_l) if nvert_l else np.zeros(0, np.int64)
+        fvxyz = np.concatenate(fvxyz_l, axis=0) if fvxyz_l else np.zeros((0, 3))
+        ncell = gen.shape[0]; tface = nvert.shape[0]
+        cf_start = np.zeros(ncell + 1, dtype=np.int64); cf_start[1:] = np.cumsum(nface)
+        fv_start = np.zeros(tface + 1, dtype=np.int64); fv_start[1:] = np.cumsum(nvert)
+        return VoronoiGrid(
+            gen=np.ascontiguousarray(gen), volume=volume, cell_rad=cell_rad,
+            cf_start=cf_start, fv_start=fv_start,
+            fvx=np.ascontiguousarray(fvxyz[:, 0]),
+            fvy=np.ascontiguousarray(fvxyz[:, 1]),
+            fvz=np.ascontiguousarray(fvxyz[:, 2]),
+            lo=grid_lo, hi=grid_hi, periodic=periodic)
+
+    @classmethod
+    def _from_arepo(cls, pts, dom_lo, dom_hi, grid_lo, grid_hi, periodic,
+                    n_threads):
+        """Tessellate via AREPO (codes/arepo) through the `_arepo` shell-out helper
+        (write HDF5 snapshot -> run `Arepo param.txt 14` mesh dump -> parse). AREPO
+        runs PERIODIC over a cubic box (its native regime); each cell is rebuilt as
+        the ConvexHull of its periodic-unwrapped vertices -> exact volume + clean
+        faces (AREPO's raw face lists need it; see `_arepo/arepo_mesh.py`).
+        n_threads>1 launches `mpirun -np n_threads` (AREPO's MPI works)."""
+        if not _HAS_AREPO:
+            raise RuntimeError(
+                "backend='arepo' needs the built Arepo executable in codes/arepo "
+                "(see setupfiles/sph_interp/_arepo/arepo_mesh.py)")
+        m = _arepo_mesh.tessellate(pts, dom_lo, dom_hi, n_threads=n_threads)
+        return VoronoiGrid(
+            gen=np.ascontiguousarray(m["gen"]), volume=m["volume"],
+            cell_rad=m["cell_rad"], cf_start=m["cf_start"], fv_start=m["fv_start"],
+            fvx=m["fvx"], fvy=m["fvy"], fvz=m["fvz"],
+            lo=grid_lo, hi=grid_hi, periodic=periodic)
+
+    @classmethod
+    def _tessellate(cls, pts, dom_lo, dom_hi, grid_lo, grid_hi, dispersion,
+                    backend, n_threads):
+        """Raw NON-periodic tessellation of `pts` over the mesher domain
+        [dom_lo, dom_hi] -> CSR VoronoiGrid stored with bounds [grid_lo, grid_hi]
+        (the two differ for the periodic ghost path: padded mesher box vs physical
+        box). `backend`: 'auto' (madvoro if its driver is built, else multivoro if
+        installed, else pyvoro), 'madvoro' (distributed, via the compiled shell-out
+        driver), 'multivoro', or 'pyvoro'. `n_threads`: multivoro thread count, or
+        madvoro MPI rank count (>1 -> mpirun); <=0 -> all cores (multivoro)."""
+        N = pts.shape[0]
+        eff = _resolve_backend(backend)          # auto -> madvoro/multivoro/pyvoro
+        if eff == "arepo":
+            return cls._from_arepo(pts, dom_lo, dom_hi, grid_lo, grid_hi,
+                                   (False, False, False), n_threads)
+        if eff == "madvoro":
+            return cls._from_madvoro(pts, dom_lo, dom_hi, grid_lo, grid_hi,
+                                     (False, False, False), n_threads)
+        use_mv = eff == "multivoro"
+        if backend == "multivoro" and not _HAS_MULTIVORO:
+            raise ImportError("backend='multivoro' but the multivoro package is "
+                              "not installed")
+        if use_mv:
+            nt = int(n_threads) if n_threads and n_threads > 0 else _DEFAULT_THREADS
+            lim = np.array([dom_lo, dom_hi], dtype=np.float64)   # (2,3): lower,upper
+            with _silence_cstd():
+                cells = _multivoro.compute_voronoi(
+                    np.ascontiguousarray(pts, dtype=np.float64), limits=lim,
+                    radii=np.zeros(N), periodic_boundaries=(False, False, False),
+                    n_threads=nt)
+            return cls._from_multivoro(cells, pts, grid_lo, grid_hi,
+                                       (False, False, False))
+        import pyvoro
+        if dispersion is None:
+            dispersion = float((np.prod(np.asarray(dom_hi) - np.asarray(dom_lo))
+                                / max(N, 1)) ** (1.0 / 3.0))
+        limits = [[dom_lo[a], dom_hi[a]] for a in range(3)]
+        cells = pyvoro.compute_voronoi(pts.tolist(), limits, dispersion,
+                                       radii=[], periodic=[False, False, False])
+        return cls._from_pyvoro(cells, grid_lo, grid_hi, (False, False, False))
 
 
 def voronoi_candidates(gen, pos, radii):

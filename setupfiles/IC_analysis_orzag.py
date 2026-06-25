@@ -51,10 +51,10 @@ from IC_analysis_framework import (
     reference_path_for, save_reference, find_reference, residuals,
     render_reference_path_for, reference_dir_for, resolve_reference_dir,
     copy_run_log, snapshot_times, missing_render_times,
-    series_from_log_or_snapshots,
+    series_from_log_or_snapshots, find_files,
 )
 from IC_analysis_general import (
-    read_vector_aux,
+    read_vector_aux, read_tufac,
     setup_rcparams, finish_figure_with_legend,
 )
 
@@ -299,6 +299,59 @@ def emag_series(inp):
     return series_from_log_or_snapshots(inp, ["dTime", "Emag"], emag)
 
 
+# --------------------------------------------------------------------------- #
+#  Full energy budget (text diagnostic, no plot)
+# --------------------------------------------------------------------------- #
+
+def snapshot_energies(fn, tufac):
+    """(time, E_kin, E_therm, E_mag) for snapshot fn.
+
+    E_kin = sum 1/2 m v^2,  E_therm = sum m u = tufac sum m T,
+    E_mag = sum 1/2 |B|^2 V_i (V_i = m/rho; 0 if no BField aux). Same definitions
+    as the sedov energy diagnostic so the two tests report a comparable budget."""
+    tgdata, _td, _ts, hdr, time = tip.readtipsy(fn)
+    t = float(np.asarray(time).ravel()[0])
+    m = tgdata[:, 0]
+    e_kin = float(np.sum(0.5 * m * np.sum(tgdata[:, 4:7] ** 2, axis=1)))
+    e_therm = float(tufac * np.sum(m * tgdata[:, 8]))
+    B = read_vector_aux(fn, "BField", int(hdr[2]))
+    e_mag = 0.0
+    if B is not None:
+        b2 = np.sum(np.asarray(B, float) ** 2, axis=1)
+        e_mag = float(np.sum(0.5 * b2 * m / tgdata[:, 7]))
+    return t, e_kin, e_therm, e_mag
+
+
+def print_energy_diagnostic(inputs, labels):
+    """Text-only diagnostic of the full energy budget over time (no plot).
+
+    For each run, prints E_kin, E_therm, E_mag and their total at every snapshot,
+    plus the fractional drift of the total from t=0. The Orszag-Tang vortex has no
+    source/sink, so E_tot should stay ~flat (a quick conservation check), while
+    E_mag winds up then reconnects, trading against the kinetic/thermal energy."""
+    for inp, lab in zip(inputs, labels):
+        tufac = read_tufac(inp)
+        try:
+            files = find_files(inp)
+        except FileNotFoundError:
+            files = []
+        rows = sorted((snapshot_energies(fn, tufac) for fn in files),
+                      key=lambda r: r[0])
+        if not rows:
+            print(f"orzag[{lab}]: no snapshots for energy diagnostic",
+                  file=sys.stderr)
+            continue
+        e_tot0 = sum(rows[0][1:])
+        print(f"[orzag] energy diagnostic [{lab}] (tufac={tufac:g}):")
+        print(f"  {'t':>10} {'E_kin':>12} {'E_therm':>12} {'E_mag':>12} "
+              f"{'E_tot':>12} {'dE_tot/E0':>10}")
+        for t, ek, eth, em in rows:
+            et = ek + eth + em
+            drift = (et / e_tot0 - 1.0) if e_tot0 != 0 else float("nan")
+            print(f"  {t:10.4g} {ek:12.6g} {eth:12.6g} {em:12.6g} "
+                  f"{et:12.6g} {drift:+9.2%}")
+
+
 def plot_emag_vs_time(inputs, labels, save=None, ref_table=None):
     """E_mag(t)/E_mag(0) for each run (grows as the field winds up, then decays).
 
@@ -437,6 +490,7 @@ def main():
     if args.reference is not None:
         ref_table, _p = find_reference(args.inputs[0], args.reference)
 
+    print_energy_diagnostic(args.inputs, labels)
     plot_emag_vs_time(args.inputs, labels, save=args.save, ref_table=ref_table)
     if args.render:
         do_render(args.inputs, labels, args, save=args.save, is3d=is3d,

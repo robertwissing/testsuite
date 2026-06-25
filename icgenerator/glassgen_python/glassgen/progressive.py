@@ -123,7 +123,8 @@ def auto_coarse_count(density, box, alpha=2.0, grid=128, eps_frac=2e-4):
 
 
 def default_levels(nx_full, nx_coarse, coarse_kw=None, fine_kw=None,
-                   momentum=0.0, icr0_stop=3e-3, polish_iter=0):
+                   momentum=0.0, icr0_stop=3e-3, polish_iter=0,
+                   cap=None, start_icr0=1.0, cap_mode='h'):
     """Build the default coarse->fine schedule for a target nx_full given a
     fixed nx_coarse. Returns a list of level dicts. When nx_full <= nx_coarse
     the coarse stage is dropped and a single full-resolution level is returned.
@@ -147,15 +148,27 @@ def default_levels(nx_full, nx_coarse, coarse_kw=None, fine_kw=None,
         only (the full-resolution run) - stop after this many polish iters
         regardless of icr0_stop (which still cuts it short if it converges
         first). 0 = off; the coarse/intermediate stages keep relax()'s off
-        default."""
+        default.
+    cap : per-step move cap on the POST-SPLIT fine stage, in units of h
+        (relax's max_step_frac). None = follow confine = clamp each move
+        component to 1*h (the default; only the momentum term can then exceed
+        1*h, see relax/stepper). 0.0 = no cap. The fine stage keeps confine's
+        box=None controller either way, so start_icr0 stays in units of h.
+    start_icr0 : starting icr0 for the POST-SPLIT fine stage in units of h
+        (default 1.0). Because the fine stage is confined (box=None controller,
+        no box amplification) this IS the iter-0 step as a fraction of h; the
+        controller then shrinks it (/~2.2 on iter 1) and self-regulates to its
+        critical-step setpoint, so this mostly sets the initial transient."""
     # icr0_stop (step < icr0_stop*h) is the finish for EVERY stage - it is
     # amplification-independent, so the box-amplified coarse stage uses it too.
     coarse_defaults = dict(confine=False, reanneal=True, icr0=1.0,
                            icrloop0=0.5, max_iter=4800, icr0_stop=icr0_stop)
-    fine_defaults = dict(confine=True, reanneal=False, icr0=1.0,
+    fine_defaults = dict(confine=True, reanneal=False, icr0=start_icr0,
                          icrloop0=0.5, max_iter=4800,
                          momentum=momentum, icr0_stop=icr0_stop,
-                         polish_iter=polish_iter)
+                         polish_iter=polish_iter, cap_mode=cap_mode)
+    if cap is not None:
+        fine_defaults['max_step_frac'] = cap
     if coarse_kw:
         coarse_defaults.update(coarse_kw)
     if fine_kw:
@@ -177,7 +190,8 @@ def default_levels(nx_full, nx_coarse, coarse_kw=None, fine_kw=None,
 
 def cascade_levels(nx_full=None, nx_coarse=None, *, factor=None, inter_iter=10,
                    coarse_kw=None, fine_kw=None,
-                   inter_kw=None, momentum=0.0, icr0_stop=3e-3, polish_iter=0):
+                   inter_kw=None, momentum=0.0, icr0_stop=3e-3, polish_iter=0,
+                   cap=None, start_icr0=1.0, cap_mode='h'):
     """Coarse -> CASCADE -> fine schedule (a multigrid-style prolongation).
 
     Instead of the single big x(nx_full/nx_coarse)^3 jump that default_levels
@@ -207,10 +221,12 @@ def cascade_levels(nx_full=None, nx_coarse=None, *, factor=None, inter_iter=10,
     # max_iter=inter_iter (icr0_stop off - they won't converge in inter_iter).
     coarse_defaults = dict(confine=False, reanneal=True, icr0=1.0,
                            icrloop0=0.5, max_iter=4800, icr0_stop=icr0_stop)
-    fine_defaults = dict(confine=True, reanneal=False, icr0=1.0,
+    fine_defaults = dict(confine=True, reanneal=False, icr0=start_icr0,
                          icrloop0=0.5, max_iter=4800,
                          momentum=momentum, icr0_stop=icr0_stop,
-                         polish_iter=polish_iter)
+                         polish_iter=polish_iter, cap_mode=cap_mode)
+    if cap is not None:
+        fine_defaults['max_step_frac'] = cap
     # NB momentum is NOT applied to the intermediate heals: they run only
     # inter_iter (~10) iterations from a high-force post-split state, too few
     # for the heavy-ball term to settle, so it overshoots (leaving the next
@@ -261,6 +277,7 @@ def relax_progressive(pos, mass, density, box, *, nx_full=None, nx_coarse=64,
                       coarse_floor=13824, max_iter=4800,
                       split_margin=8, split_dist=0.4,
                       momentum=0.0, icr0_stop=3e-3, polish_iter=0,
+                      cap=None, start_icr0=1.0, cap_mode='h',
                       verbose=False, **relax_kw):
     """Progressive coarse->split->fine glass relaxation.
 
@@ -322,6 +339,7 @@ def relax_progressive(pos, mass, density, box, *, nx_full=None, nx_coarse=64,
             levels = cascade_levels(
                 factor=factor, inter_iter=inter_iter, momentum=momentum,
                 icr0_stop=icr0_stop, polish_iter=polish_iter,
+                cap=cap, start_icr0=start_icr0, cap_mode=cap_mode,
                 coarse_kw=dict(max_iter=max_iter),
                 fine_kw=dict(max_iter=max_iter))
             if verbose:
@@ -330,7 +348,9 @@ def relax_progressive(pos, mass, density, box, *, nx_full=None, nx_coarse=64,
                       flush=True)
         else:
             levels = default_levels(nx_full, nx_coarse, momentum=momentum,
-                                    icr0_stop=icr0_stop, polish_iter=polish_iter)
+                                    icr0_stop=icr0_stop, polish_iter=polish_iter,
+                                    cap=cap, start_icr0=start_icr0,
+                                    cap_mode=cap_mode)
 
     skip_coarse = (len(levels) == 1 and levels[0].get('split_factor', 1) == 1)
     if skip_coarse:
