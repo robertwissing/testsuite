@@ -387,13 +387,13 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
     # Reference overlay: the blessed (normalised) total/kinetic/thermal energy.
     if ref_table is not None and "Etot_n" in ref_table:
         te = ref_table["t_energy"]
-        ax.plot(te, ref_table["Etot_n"], "--", color="red", lw=1.3, zorder=5,
+        ax.plot(te, ref_table["Etot_n"], "--", color="red", lw=2.4, zorder=5,
                 label="reference")
         if "Ekin_n" in ref_table:
-            ax.plot(te, ref_table["Ekin_n"], "--", color="red", lw=0.9,
+            ax.plot(te, ref_table["Ekin_n"], "--", color="red", lw=2.0,
                     alpha=0.7, zorder=5)
         if "Eth_n" in ref_table:
-            ax.plot(te, ref_table["Eth_n"], ":", color="red", lw=1.1, zorder=5)
+            ax.plot(te, ref_table["Eth_n"], ":", color="red", lw=2.0, zorder=5)
     for inp, lab in zip(inputs, labels):
         tufac = read_tufac(inp)
         ts, ek, eth, em, source = energy_series(inp, tufac)
@@ -414,12 +414,12 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
         else:
             yt, yk, yth, yem = et, ek, eth, None
         style = "-" if source == "log" else "o-"   # dense log -> line
-        line, = ax.plot(ts, yt, style, ms=3, label=f"{lab} total")
+        line, = ax.plot(ts, yt, style, ms=3, lw=2.6, label=f"{lab} total")
         c = line.get_color()
-        ax.plot(ts, yk, "--", lw=1.2, color=c, alpha=0.8, label="kinetic")
-        ax.plot(ts, yth, ":", lw=1.4, color=c, alpha=0.8, label="thermal")
+        ax.plot(ts, yk, "--", lw=2.2, color=c, alpha=0.8, label="kinetic")
+        ax.plot(ts, yth, ":", lw=2.2, color=c, alpha=0.8, label="thermal")
         if magnetic:                            # E_mag / E_tot(0)
-            ax.plot(ts, yem, "-.", lw=1.4, color=c, alpha=0.8, label="magnetic")
+            ax.plot(ts, yem, "-.", lw=2.2, color=c, alpha=0.8, label="magnetic")
             print(f"sedov[{lab}] energy (/ E_tot(0), t={ts[0]:.4g}): "
                   f"total {yt[0]:.4g}->{yt[-1]:.4g}  "
                   f"kinetic {yk[0]:.4g}->{yk[-1]:.4g}  "
@@ -497,18 +497,23 @@ def render_specs(betain, select):
     / Price et al. (2018) fixed limits (linear scale) for direct comparison."""
     stone = int(select) == 2
 
-    def spec(q, label, slug, cmap):
+    # `clim` (lo, hi) gives a fixed LOG colour range for the non-Stone case; None
+    # auto-scales. Stone (-a 2) keeps its own linear STONE_CLIMS.
+    def spec(q, label, slug, cmap, clim=None):
         if stone and slug in STONE_CLIMS:
             return RenderSpec(1, 2, q, label, False, "slice",
                               _fixed_clim(*STONE_CLIMS[slug]), cmap, False,
                               slug=slug)
-        return RenderSpec(1, 2, q, label, True, "slice", None, cmap, False,
+        return RenderSpec(1, 2, q, label, True, "slice",
+                          _fixed_clim(*clim) if clim else None, cmap, False,
                           slug=slug)
 
     specs = [
         (spec(7, r"$\rho$", "rho", "inferno"), "rho"),
-        (spec(ke_density(), r"$\frac{1}{2}\rho v^2$", "Ekin", "viridis"), "Ekin"),
-        (spec(thermal_pressure(GAMMA), r"$P$", "P", "inferno"), "P"),
+        (spec(ke_density(), r"$\frac{1}{2}\rho v^2$", "Ekin", "viridis",
+              clim=(1e-3, 1.0)), "Ekin"),
+        (spec(thermal_pressure(GAMMA), r"$P$", "P", "inferno",
+              clim=(1e-3, 100.0)), "P"),
     ]
     if betain != 0:
         specs.append((spec(magnetic_pressure(), r"$\frac{1}{2}|B|^2$", "Pmag",
