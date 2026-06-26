@@ -338,7 +338,7 @@ def finish_figure(fig, save=None, dpi=150):
         plt.show()
 
 
-def finish_figure_with_legend(fig, ax, save=None, dpi=150):
+def finish_figure_with_legend(fig, ax, save=None, dpi=150, footnote=None):
     """Like `finish_figure`, but the legend (built from `ax`'s labelled artists)
     is drawn BELOW the figure itself -- a figure-level legend anchored under the
     axes -- so the plot stays one self-contained image instead of a separate
@@ -346,7 +346,9 @@ def finish_figure_with_legend(fig, ax, save=None, dpi=150):
     in-axes annotations like the L1-error boxes.
 
     `save` is the figure path (e.g. 'out_profile.png'). When `ax` is a sequence
-    of axes, the labels are pooled across them (de-duplicated, first wins)."""
+    of axes, the labels are pooled across them (de-duplicated, first wins).
+    `footnote` (optional): a caption drawn BELOW the legend (boxed), e.g. the
+    %-error vs analytic -- kept off the main plot."""
     import matplotlib.pyplot as plt
     axes = ax if isinstance(ax, (list, tuple, np.ndarray)) else [ax]
     handles, labels = [], []
@@ -358,19 +360,32 @@ def finish_figure_with_legend(fig, ax, save=None, dpi=150):
                 handles.append(h)
                 labels.append(l)
 
-    extra = ()
+    extra = []
     if handles:
         leg = fig.legend(handles, labels, loc="upper center",
                          bbox_to_anchor=(0.5, 0.0), ncol=min(3, len(labels)),
                          frameon=False, handlelength=2.5, handletextpad=0.8,
                          columnspacing=1.5)
-        extra = (leg,)
+        extra.append(leg)
+
+    if footnote:
+        # Draw it just below the legend (figure coords): realize the legend's
+        # extent first, then anchor the caption under its bottom edge.
+        y = 0.0
+        if extra:
+            fig.canvas.draw()
+            lb = leg.get_window_extent().transformed(fig.transFigure.inverted())
+            y = lb.y0 - 0.02
+        ft = fig.text(0.5, y, footnote, ha="center", va="top", fontsize=8,
+                      bbox=dict(boxstyle="round", fc="white", ec="0.6",
+                                alpha=0.85))
+        extra.append(ft)
 
     if not save:
         plt.show()
         return
-    # bbox_extra_artists + tight bbox so the below-figure legend isn't clipped.
-    fig.savefig(save, bbox_inches="tight", bbox_extra_artists=extra, dpi=dpi)
+    # bbox_extra_artists + tight bbox so the below-figure legend/footnote aren't clipped.
+    fig.savefig(save, bbox_inches="tight", bbox_extra_artists=tuple(extra), dpi=dpi)
     print(f"saved {save}")
     plt.close(fig)
 

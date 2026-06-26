@@ -394,6 +394,7 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
                     alpha=0.7, zorder=5)
         if "Eth_n" in ref_table:
             ax.plot(te, ref_table["Eth_n"], ":", color="red", lw=2.0, zorder=5)
+    annot_blocks = []   # per-run "vs analytic at t" %-error strings for a figure box
     for inp, lab in zip(inputs, labels):
         tufac = read_tufac(inp)
         ts, ek, eth, em, source = energy_series(inp, tufac)
@@ -433,8 +434,10 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
                     ("kinetic", ek[j], f_kin * E0),
                     ("thermal", eth[j], f_therm * E0))
             print(f"sedov[{lab}] energy vs analytic at t={ts[j]:.4g}:")
+            rels = []
             for name, sim, ana in refs:
                 rel = 100.0 * (sim - ana) / ana if ana else float("nan")
+                rels.append((name, rel))
                 print(f"   {name:<7s} sim={sim:8.4g}  analytic={ana:8.4g}  "
                       f"rel.diff={rel:+6.2f}%")
                 # Soft energy-conservation warning on the TOTAL energy only --
@@ -446,6 +449,10 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
                                  f"{lab}: total energy {rel:+.2f}% vs analytic at "
                                  f"t={ts[j]:.4g} exceeds the {100 * warn_tol:g}% "
                                  f"soft tolerance")
+            # Same %-errors on the figure (one line per run).
+            annot_blocks.append(
+                f"{lab} vs analytic @ t={ts[j]:.3g}:  "
+                + "   ".join(f"{nm} {r:+.2f}%" for nm, r in rels))
 
     if hydro_blast:
         ax.axhline(1.0, color="k", ls="--", lw=1.2, label="analytic (=1)")
@@ -464,7 +471,10 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
         ax.set_title("Sedov energy vs time (total / kinetic / thermal)")
     ax.set_xlabel("t")
     fig.tight_layout()
-    finish_figure_with_legend(fig, ax, save=(f"{save}_energy.png" if save else None))
+    # %-errors vs analytic go BELOW the legend (off the main plot).
+    finish_figure_with_legend(fig, ax, save=(f"{save}_energy.png" if save else None),
+                              footnote=("\n".join(annot_blocks) if annot_blocks
+                                        else None))
 
 
 # --------------------------------------------------------------------------- #
@@ -511,9 +521,9 @@ def render_specs(betain, select):
     specs = [
         (spec(7, r"$\rho$", "rho", "inferno"), "rho"),
         (spec(ke_density(), r"$\frac{1}{2}\rho v^2$", "Ekin", "viridis",
-              clim=(1e-3, 1.0)), "Ekin"),
+              clim=(1e-3, 100.0)), "Ekin"),
         (spec(thermal_pressure(GAMMA), r"$P$", "P", "inferno",
-              clim=(1e-3, 100.0)), "P"),
+              clim=(1e-1, 100.0)), "P"),
     ]
     if betain != 0:
         specs.append((spec(magnetic_pressure(), r"$\frac{1}{2}|B|^2$", "Pmag",
