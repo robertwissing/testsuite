@@ -70,7 +70,7 @@ shift $((OPTIND - 1))
 CHANGA_SRC="${1:?usage: run_changa_ci_test.sh [--bless | --bless-readydata] [--matrix <file>] [--extra <flags>] [-a..-h v] <changa-src> [<test> <Nsmooth> <Nres> <distrib> [reg-tol]]}"
 TEST="${2:-}"; NSM="${3:-}"; NRES="${4:-}"; DIST="${5:-}"; TOL="${6:-}"
 TS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PE="${PE:-4}"
+PE="${PE:-2}"        # ++local +p 2 by default, matching the CI launcher
 EXT="${CHANGA_CI_EXT:-$HOME/.changa_ci_ext}"
 CHARM_TARGET="netlrts-linux-x86_64-smp"
 # ChaNGa branch to build: the MHD development branch for now; switch to the
@@ -81,6 +81,11 @@ CHANGA_BRANCH="${CHANGA_BRANCH:-MHD_tp_replication}"
 [ "${CHANGA_SRC#/}" = "$CHANGA_SRC" ] && CHANGA_SRC="$PWD/$CHANGA_SRC"
 [ "${EXT#/}" = "$EXT" ] && EXT="$PWD/$EXT"
 [ -d "$CHANGA_SRC" ] || { echo "FATAL: changa-src not found: $CHANGA_SRC"; exit 1; }
+# runtest.sh reads these from the environment (no source edits): point CHANGA_DIR
+# at the build dir, and use the CI-consistent ++local +p N charmrun launcher so a
+# locally blessed reference matches what CI produces.
+export CHANGA_DIR="$CHANGA_SRC"
+export CHANGA_CHARMRUN_OPTS="++local +p $PE"
 # A user-given --matrix is relative to the invocation cwd; the default lives under
 # TS_ROOT (read after the cd below).
 if [ -n "$MATRIX_FILE" ]; then
@@ -110,9 +115,8 @@ if [ "$MODE" != blessready ] && [ ! -x "$CHANGA_SRC/ChaNGa.smp" ]; then
       || { echo "FATAL: ChaNGa build failed"; exit 1; }
     ln -sf "$CHANGA_SRC/ChaNGa" "$CHANGA_SRC/ChaNGa.smp"
     ln -sf "$CHARM_DIR/$CHARM_TARGET/bin/charmrun" "$CHANGA_SRC/charmrun"
-    # Patch runtest.sh for CI: set CHANGA_DIR + use +p PE
-    sed -i "s|^export CHANGA_DIR=.*|export CHANGA_DIR=$CHANGA_SRC|" runtest.sh
-    sed -i "s/charmrun +p 64/charmrun +p $PE/" runtest.sh
+    # (CHANGA_DIR + charmrun opts are passed to runtest.sh via the environment
+    # above -- no runtest.sh source patching needed.)
 fi
 
 # --- per-test helpers (one call below for a single test; the matrix loop reuses

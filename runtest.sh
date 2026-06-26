@@ -2,7 +2,9 @@
 
 export SPHEXA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/sphexa/sphexa/build/main/src/sphexa/
 export GASOLINE_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/newtests/gasoline_claude/gasoline_claude
-export CHANGA_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/a/testsuite/ci/changa_ci_test/changa/
+# CHANGA_DIR may be overridden from the environment (e.g. CI points it at the
+# build dir); falls back to this local default otherwise.
+export CHANGA_DIR="${CHANGA_DIR:-/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/a/testsuite/ci/changa_ci_test/changa/}"
 export AREPO_DIR=/mn/stornext/d17/extragalactic/personal/robertwi/Projects/ICGEN/sims/OPTKERNELSIMS/a/testsuite/codes/arepo/
 
 #Directory for the setupfiles
@@ -990,7 +992,10 @@ echo "RUNNING CHANGA"
     codename="CHANGA"
     dir=$CHANGA_DIR
     coderun=ChaNGa.smp
-    runlauncher="$CHANGA_DIR/charmrun +p 4"
+    # CHANGA_CHARMRUN_OPTS overrides the charmrun options from the environment
+    # (e.g. CI and run_changa_ci_test.sh set "++local +p 2"); defaults to all
+    # cores for a normal interactive run.
+    runlauncher="$CHANGA_DIR/charmrun ${CHANGA_CHARMRUN_OPTS:-+p $(nproc)}"
 elif [ "$4" -eq 2 ]; then
 echo "RUNNING SPH-EXA"
     codename="SPHEXA"
