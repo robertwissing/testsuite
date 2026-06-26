@@ -1200,7 +1200,7 @@ def render_panels(entries, spec, times=None, n=4, res=512, save=None,
         # the diff figure; the diff colorbar at the far edge needs none). Panels
         # tile seamlessly: inner tick labels dropped, x only bottom row, y only left.
         fig = plt.figure(figsize=(13, 4.0 * npan))
-        gs = fig.add_gridspec(npan, 6, width_ratios=[1, 1, 0.06, 0.16, 1, 0.06],
+        gs = fig.add_gridspec(npan, 6, width_ratios=[1, 1, 0.06, 0.30, 1, 0.06],
                               wspace=0.07, hspace=0.07)
         axes = np.empty((npan, 3), dtype=object)
         for i in range(npan):
@@ -1664,7 +1664,7 @@ def render_movie(input_arg, label, spec, save=None, res=512, backend="grid",
         fig = plt.figure(figsize=(13, 4.8))
         # Spacer column (gs[*,3]) after the middle field colorbar so its right-side
         # label doesn't overlap the diff panel (see render_panels residual layout).
-        gs = fig.add_gridspec(1, 6, width_ratios=[1, 1, 0.06, 0.16, 1, 0.06],
+        gs = fig.add_gridspec(1, 6, width_ratios=[1, 1, 0.06, 0.30, 1, 0.06],
                               wspace=0.07)
         ax0, ax1, ax2 = (fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]),
                          fig.add_subplot(gs[0, 4]))
