@@ -492,8 +492,8 @@ def _fixed_clim(lo, hi):
 
 def render_specs(betain, select):
     """The unified render set, identical across the -a cases: rho, KE density,
-    P, Pmag (only when betain>0 -- no field otherwise) and divBerr (LOG, fixed
-    1e-3..1.0). For -a 2 the rho/Ekin/P/Pmag maps carry the Stone et al. (2008)
+    P, and -- only when betain>0 (no field otherwise) -- Pmag and divBerr (LOG,
+    fixed 1e-3..1.0). For -a 2 the rho/Ekin/P/Pmag maps carry the Stone et al. (2008)
     / Price et al. (2018) fixed limits (linear scale) for direct comparison."""
     stone = int(select) == 2
 
@@ -513,11 +513,12 @@ def render_specs(betain, select):
     if betain != 0:
         specs.append((spec(magnetic_pressure(), r"$\frac{1}{2}|B|^2$", "Pmag",
                            "magma"), "Pmag"))
-    specs.append((RenderSpec(1, 2, aux_divB_error("DivB", "BField"),
-                             "divBerr", True, "slice",
-                             _fixed_clim(1e-3, 1.0), "inferno", False,
-                             slug="divBerr"),
-                  "divBerr"))
+        # divBerr is only meaningful when a field is present (betain != 0).
+        specs.append((RenderSpec(1, 2, aux_divB_error("DivB", "BField"),
+                                 "divBerr", True, "slice",
+                                 _fixed_clim(1e-3, 1.0), "inferno", False,
+                                 slug="divBerr"),
+                      "divBerr"))
     return specs
 
 

@@ -550,24 +550,27 @@ def mhd_field_cut_quants():
 def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
                    time_label="t", title_prefix="", axis_x=1, axis_y=2,
                    strip_cells=1.0):
-    """1-D cuts of fields vs x along the horizontal line y=y0, one figure per time
-    (one stacked panel per quantity).
+    """1-D cuts of fields vs x along the horizontal line y=y0, as a single figure
+    with one ROW per quantity and one COLUMN per time (nearest snapshot chosen),
+    so a single requested time is one column and several times tile across.
 
     quants  : [(slug, ylabel, qfn(fn, tgdata, ngas))] -- the fields to cut.
-    times   : the times to cut at (nearest snapshot chosen).
-    y0_of   : callable t -> y0 (the cut height); annotated in the title.
+    times   : the times to cut at (one column each).
+    y0_of   : callable t -> y0 (the cut height); annotated per column.
     Particles within |y - y0| < strip_cells / n_x (n_x from the run name) are
     scattered vs x and overlaid with a binned-mean line. axis_x/axis_y are the
     tgdata column indices of the in-plane coordinates (default x=1, y=2)."""
     import matplotlib.pyplot as plt
     setup_rcparams()
     xname = "xyz"[axis_x - 1]
-    for t in times:
+    nq, nt = len(quants), len(times)
+    fig, axes = plt.subplots(nq, nt,
+                             figsize=(1.0 + 3.2 * nt, 2.2 * nq + 1.0),
+                             sharex=True, sharey="row", squeeze=False)
+    any_data_any = False
+    for tj, t in enumerate(times):
         y0 = y0_of(t)
-        fig, axes = plt.subplots(len(quants), 1,
-                                 figsize=(8, 2.2 * len(quants) + 1.0),
-                                 sharex=True, squeeze=False)
-        axes = axes[:, 0]
+        col = axes[:, tj]
         any_data = False
         for ci, (inp, lab) in enumerate(zip(inputs, labels)):
             try:
@@ -587,33 +590,37 @@ def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
             x = x[order]
             for qi, (slug, ylabel, qfn) in enumerate(quants):
                 q = np.asarray(qfn(fn, tgdata, ngas), dtype=float)[strip][order]
-                axes[qi].scatter(x, q, s=4, alpha=0.4, color=f"C{ci}",
-                                 rasterized=True,
-                                 label=lab if qi == 0 else None)
+                col[qi].scatter(x, q, s=4, alpha=0.4, color=f"C{ci}",
+                                rasterized=True,
+                                label=lab if (qi == 0 and tj == 0) else None)
                 if x.size > 8:                       # binned-mean line
                     xc, qm = binned_profile(x, q, nbins=min(nx, 128), min_bins=1)
                     if xc is not None:
-                        axes[qi].plot(xc, qm, "-", color=f"C{ci}", lw=1.5)
-                axes[qi].set_ylabel(ylabel)
+                        col[qi].plot(xc, qm, "-", color=f"C{ci}", lw=1.5)
+                if tj == 0:
+                    col[qi].set_ylabel(ylabel)
             any_data = True
-        for ax in axes:
+            any_data_any = True
+        for ax in col:
             ax.axhline(0.0, color="0.85", lw=0.8, zorder=0)
-        axes[-1].set_xlabel(xname)
-        axes[0].set_title(f"{title_prefix}horizontal cut at "
-                          f"{'xyz'[axis_y - 1]}0 = {y0:g}  ({time_label} = {t:g})")
-        if any_data and len(inputs) > 1:
-            axes[0].legend(fontsize=8, loc="best")
-        fig.tight_layout()
+        col[-1].set_xlabel(xname)
+        col[0].set_title(f"{time_label} = {t:g}  "
+                         f"({'xyz'[axis_y - 1]}0 = {y0:g})")
         if not any_data:
             print(f"horizontal_cut: no data at {time_label}={t:g}",
                   file=sys.stderr)
-        if save:
-            out = f"{save}_cut_t{t:g}.png"
-            fig.savefig(out, bbox_inches="tight")
-            print(f"saved cut -> {out}")
-            plt.close(fig)
-        else:
-            plt.show()
+    if any_data_any and len(inputs) > 1:
+        axes[0, 0].legend(fontsize=8, loc="best")
+    if title_prefix:
+        fig.suptitle(f"{title_prefix}horizontal cut")
+    fig.tight_layout()
+    if save:
+        out = f"{save}_cut.png"
+        fig.savefig(out, bbox_inches="tight")
+        print(f"saved cut -> {out}")
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def bless_render_specs(inp, specs, args, test, plane="z0", extent=None,

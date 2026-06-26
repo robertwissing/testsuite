@@ -47,6 +47,7 @@ from IC_analysis_framework import (
     Param, build_parser, params_from_args, check_residual_args,
     RenderSpec, spec_slug, render_panels, render_movie,
     aux_magnitude, aux_divB_error, aux_component, thermal_pressure,
+    magnetic_pressure,
     horizontal_cut, mhd_field_cut_quants,
     reference_path_for, save_reference, find_reference, residuals,
     render_reference_path_for, reference_dir_for, resolve_reference_dir,
@@ -93,6 +94,7 @@ def _fixed_clim(lo, hi):
 RHO_CLIM = _fixed_clim(0.1, 0.5)        # linear
 BMAG_CLIM = _fixed_clim(0.05, 1.0)      # linear
 P_CLIM = _fixed_clim(0.0, 0.5)          # linear (thermal pressure)
+PMAG_CLIM = _fixed_clim(0.0, 0.25)      # linear (magnetic pressure |B|^2/2)
 # divBerr: fixed LOG range 1e-3 .. 1.0 (3 decades).
 DIVBERR_CLIM = _fixed_clim(1e-3, 1.0)
 
@@ -107,11 +109,11 @@ PLANES_3D = [PLANE_XY, ("x0", 2, 3), ("y0", 1, 3)]   # +y-z (x=0), x-z (y=0)
 def render_specs(project="slice", axis1=1, axis2=2, is3d=False):
     """The four field maps in the (axis1, axis2) plane.
 
-    2-D vortex: density rho, the signed field components Bx and By, and the
+    2-D vortex: density rho, the magnetic pressure Pmag = |B|^2/2, and the
     divergence error |div B| h/|B|, in HORIZONTAL SLICES through the centre
-    (project="slice" at z=0). 3-D vortex: rho, |B|, divBerr, thermal pressure P
-    (mid-plane slices of the cube). Fixed color ranges: rho/|B|/P LINEAR, Bx/By
-    symmetric diverging, divBerr LOG (1e-3..1.0)."""
+    (project="slice" at z=0). The signed Bx/By stay on the 1-D y0 cut. 3-D
+    vortex: rho, |B|, divBerr, thermal pressure P (mid-plane slices of the cube).
+    Fixed color ranges: rho/|B|/P/Pmag LINEAR, divBerr LOG (1e-3..1.0)."""
     # NOTE: rho (bwr) and |B| (rainbow) keep their OT-benchmark cmaps rather than
     # the canonical inferno; each spec carries an explicit slug.
     if is3d:
@@ -129,10 +131,8 @@ def render_specs(project="slice", axis1=1, axis2=2, is3d=False):
     return [
         RenderSpec(axis1, axis2, 7, r"$\rho$", False, project, RHO_CLIM,
                    "bwr", False, slug="rho"),
-        RenderSpec(axis1, axis2, aux_component("BField", 0), r"$B_x$", False,
-                   project, None, "RdBu_r", True, slug="Bx"),
-        RenderSpec(axis1, axis2, aux_component("BField", 1), r"$B_y$", False,
-                   project, None, "RdBu_r", True, slug="By"),
+        RenderSpec(axis1, axis2, magnetic_pressure(), r"$\frac{1}{2}|B|^2$", False,
+                   project, PMAG_CLIM, "rainbow", False, slug="Pmag"),
         RenderSpec(axis1, axis2, aux_divB_error(), r"$|\nabla\!\cdot\!B|\,h/|B|$",
                    True, project, DIVBERR_CLIM, "inferno", False, slug="divBerr"),
     ]

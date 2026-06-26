@@ -9,5 +9,5 @@
 # run_changa_ci_test.sh reads this file natively when no <test> is given:
 #   bash ci/run_changa_ci_test.sh --bless "$CHANGA_SRC"   # bless every row
 #   bash ci/run_changa_ci_test.sh         "$CHANGA_SRC"   # gate  every row
-sedov   32  16  0  1e-1
-orzag   32  16  0  1e-1
+sedov   64  32  2  1e-1
+orzag   64  32  2  1e-1
