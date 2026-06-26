@@ -432,22 +432,11 @@ def series_from_log_or_snapshots(inp, log_cols, per_snapshot, valid=None):
 #  Plotting
 # --------------------------------------------------------------------------- #
 
-def _legend_figure(handles, labels):
-    """Build a standalone figure holding just the legend (no axes)."""
-    import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(6, 0.5 + 0.35 * len(labels)))
-    fig.legend(handles, labels, loc="center", ncol=min(3, len(labels)),
-               frameon=False, handlelength=2.5, handletextpad=0.8,
-               columnspacing=1.5)
-    fig.tight_layout(pad=0.1)
-    return fig
-
-
 def plot_compare(results, ref_table, analytic, params, metrics, save=None):
-    """One figure per metric (+ a separate legend figure) for each metric.
+    """One figure per metric, with the legend drawn BELOW the figure (one
+    self-contained image, not a separate legend file).
 
-    results : list of (label, table, ...) for each input. The legend is placed in
-    its own figure rather than on the axes (publication-friendly).
+    results : list of (label, table, ...) for each input.
     """
     import matplotlib.pyplot as plt
     setup_rcparams()
@@ -463,7 +452,7 @@ def plot_compare(results, ref_table, analytic, params, metrics, save=None):
 
         if ref_table is not None and met.key in ref_table:
             plotfn(ref_table["x"], ref_table[met.key], marker="x",
-                   linestyle="--", color="0.4", label="reference")
+                   linestyle="--", color="red", label="reference")
 
         if analytic is not None:
             curve = analytic(met.key, params)
@@ -473,21 +462,22 @@ def plot_compare(results, ref_table, analytic, params, metrics, save=None):
 
         ax.set_xlabel(met.xlabel)
         ax.set_ylabel(met.ylabel)
-        fig.tight_layout()
 
-        # Legend goes in its own figure, not on the axes.
+        # Legend below the figure (not on the axes, not a separate file).
         handles, labels = ax.get_legend_handles_labels()
-        legfig = _legend_figure(handles, labels) if handles else None
+        extra = ()
+        if handles:
+            leg = fig.legend(handles, labels, loc="upper center",
+                             bbox_to_anchor=(0.5, 0.0), ncol=min(3, len(labels)),
+                             frameon=False, handlelength=2.5, handletextpad=0.8,
+                             columnspacing=1.5)
+            extra = (leg,)
+        fig.tight_layout()
 
         if save:
             out = f"{save}_{met.key}.png"
-            fig.savefig(out, bbox_inches="tight")
+            fig.savefig(out, bbox_inches="tight", bbox_extra_artists=extra)
             print(f"saved figure -> {out}")
-            if legfig is not None:
-                legout = f"{save}_{met.key}_legend.png"
-                legfig.savefig(legout, bbox_inches="tight")
-                print(f"saved legend -> {legout}")
-                plt.close(legfig)
             plt.close(fig)
         else:
             plt.show()
@@ -530,6 +520,13 @@ def render_reference_path_for(input_arg, slug, plane="z0"):
                         f"render_{slug}_{plane}.npz")
 
 
+def cut_reference_path_for(input_arg, slug, t):
+    """1-D-cut reference path inside the run's reference folder:
+    '<references>/<runname>/cut_<slug>_t<t>.npz'. One npz per quantity/time,
+    storing the binned (x, q) profile -- the dashed baseline the cut overlays."""
+    return os.path.join(reference_dir_for(input_arg), f"cut_{slug}_t{t:g}.npz")
+
+
 
 # --------------------------------------------------------------------------- #
 #  1-D horizontal cuts (field vs x along a line y=y0)
@@ -547,9 +544,32 @@ def mhd_field_cut_quants():
     ]
 
 
+def _cut_binned_profile(inp, t, y0, qfn, axis_x, axis_y, strip_cells):
+    """The binned (x, q) profile of one quantity at one time along y=y0, or
+    (None, None) if the snapshot is missing or too sparse. Shared by the draw,
+    bless, and overlay paths so they bin identically."""
+    try:
+        files = find_files(inp)
+    except FileNotFoundError:
+        return None, None
+    chosen = select_snapshots(files, times=[t], n=1)
+    if not chosen:
+        return None, None
+    fn, _tt = chosen[0]
+    tgdata, _td, _ts, hdr, _tm = _cached_readtipsy(fn)
+    ngas = int(hdr[2])
+    nx = parse_resolution(inp) or 64
+    strip = np.abs(tgdata[:, axis_y] - y0) < strip_cells / nx
+    x = np.asarray(tgdata[strip, axis_x], dtype=float)
+    order = np.argsort(x)
+    x = x[order]
+    q = np.asarray(qfn(fn, tgdata, ngas), dtype=float)[strip][order]
+    return x, q
+
+
 def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
                    time_label="t", title_prefix="", axis_x=1, axis_y=2,
-                   strip_cells=1.0):
+                   strip_cells=1.0, reference=None, bless=False):
     """1-D cuts of fields vs x along the horizontal line y=y0, as a single figure
     with one ROW per quantity and one COLUMN per time (nearest snapshot chosen),
     so a single requested time is one column and several times tile across.
@@ -559,11 +579,41 @@ def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
     y0_of   : callable t -> y0 (the cut height); annotated per column.
     Particles within |y - y0| < strip_cells / n_x (n_x from the run name) are
     scattered vs x and overlaid with a binned-mean line. axis_x/axis_y are the
-    tgdata column indices of the in-plane coordinates (default x=1, y=2)."""
+    tgdata column indices of the in-plane coordinates (default x=1, y=2).
+
+    bless   : instead of drawing, save the FIRST input's binned cut profiles as
+              the baseline (one npz per quantity/time in references/<runname>/).
+    reference: when a single input is given, overlay the blessed baseline (loaded
+              from the run's own / an explicit reference folder) as a dashed line."""
     import matplotlib.pyplot as plt
     setup_rcparams()
     xname = "xyz"[axis_x - 1]
     nq, nt = len(quants), len(times)
+
+    # Bless: write the first input's binned profiles, one npz per quantity/time.
+    if bless:
+        inp = inputs[0]
+        for t in times:
+            y0 = y0_of(t)
+            for slug, _ylabel, qfn in quants:
+                x, q = _cut_binned_profile(inp, t, y0, qfn, axis_x, axis_y,
+                                           strip_cells)
+                if x is None or x.size <= 8:
+                    continue
+                nx = parse_resolution(inp) or 64
+                xc, qm = binned_profile(x, q, nbins=min(nx, 128), min_bins=1)
+                if xc is None:
+                    continue
+                out = cut_reference_path_for(inp, slug, t)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                np.savez(out, x=xc, q=qm)
+                print(f"saved cut reference -> {out}")
+        return
+
+    # Draw: one figure, rows = quantity, cols = time. Reference overlay (dashed)
+    # is opt-in (--reference) and only for a single input.
+    ref_dir = (resolve_reference_dir(inputs[0], reference)
+               if reference is not None and len(inputs) == 1 else None)
     fig, axes = plt.subplots(nq, nt,
                              figsize=(1.0 + 3.2 * nt, 2.2 * nq + 1.0),
                              sharex=True, sharey="row", squeeze=False)
@@ -573,23 +623,12 @@ def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
         col = axes[:, tj]
         any_data = False
         for ci, (inp, lab) in enumerate(zip(inputs, labels)):
-            try:
-                files = find_files(inp)
-            except FileNotFoundError:
-                continue
-            chosen = select_snapshots(files, times=[t], n=1)
-            if not chosen:
-                continue
-            fn, _tt = chosen[0]
-            tgdata, _td, _ts, hdr, _tm = _cached_readtipsy(fn)
-            ngas = int(hdr[2])
             nx = parse_resolution(inp) or 64
-            strip = np.abs(tgdata[:, axis_y] - y0) < strip_cells / nx
-            x = np.asarray(tgdata[strip, axis_x], dtype=float)
-            order = np.argsort(x)
-            x = x[order]
             for qi, (slug, ylabel, qfn) in enumerate(quants):
-                q = np.asarray(qfn(fn, tgdata, ngas), dtype=float)[strip][order]
+                x, q = _cut_binned_profile(inp, t, y0, qfn, axis_x, axis_y,
+                                           strip_cells)
+                if x is None:
+                    continue
                 col[qi].scatter(x, q, s=4, alpha=0.4, color=f"C{ci}",
                                 rasterized=True,
                                 label=lab if (qi == 0 and tj == 0) else None)
@@ -599,8 +638,19 @@ def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
                         col[qi].plot(xc, qm, "-", color=f"C{ci}", lw=1.5)
                 if tj == 0:
                     col[qi].set_ylabel(ylabel)
-            any_data = True
-            any_data_any = True
+                any_data = True
+                any_data_any = True
+        if ref_dir is not None:                      # blessed baseline (dashed red)
+            for qi, (slug, _ylabel, _qfn) in enumerate(quants):
+                cand = os.path.join(ref_dir, f"cut_{slug}_t{t:g}.npz")
+                if os.path.isfile(cand):
+                    d = np.load(cand)
+                    col[qi].plot(d["x"], d["q"], "--", color="red", lw=1.3,
+                                 label="reference" if (qi == 0 and tj == 0)
+                                 else None)
+                else:
+                    print(f"horizontal_cut: no cut reference for {slug}/t{t:g} "
+                          f"in {ref_dir}", file=sys.stderr)
         for ax in col:
             ax.axhline(0.0, color="0.85", lw=0.8, zorder=0)
         col[-1].set_xlabel(xname)
@@ -609,14 +659,26 @@ def horizontal_cut(inputs, labels, quants, times, y0_of, save=None,
         if not any_data:
             print(f"horizontal_cut: no data at {time_label}={t:g}",
                   file=sys.stderr)
-    if any_data_any and len(inputs) > 1:
-        axes[0, 0].legend(fontsize=8, loc="best")
+    # Pooled legend BELOW the figure (sim labels + the dashed red reference),
+    # matching the project convention -- not on the axes, not a separate file.
+    handles, labels = [], []
+    seen = set()
+    for a in axes.flat:
+        for h, l in zip(*a.get_legend_handles_labels()):
+            if l and l not in seen:
+                seen.add(l); handles.append(h); labels.append(l)
+    extra = ()
+    if handles:
+        leg = fig.legend(handles, labels, loc="upper center",
+                         bbox_to_anchor=(0.5, 0.0), ncol=min(4, len(labels)),
+                         frameon=False)
+        extra = (leg,)
     if title_prefix:
         fig.suptitle(f"{title_prefix}horizontal cut")
     fig.tight_layout()
     if save:
         out = f"{save}_cut.png"
-        fig.savefig(out, bbox_inches="tight")
+        fig.savefig(out, bbox_inches="tight", bbox_extra_artists=extra)
         print(f"saved cut -> {out}")
         plt.close(fig)
     else:

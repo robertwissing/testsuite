@@ -1,13 +1,17 @@
 # ChaNGa CI test list — mirrors the per-test steps in changa-regression.yml.
 # Manually kept in sync with the workflow (the workflow is the gate's source of
 # truth; this file documents the set and drives local matrix runs).
-# Columns: test  Nsmooth  Nres  distrib  reg-tol  [-a..-h v ...]   (distrib: 0=lattice)
-# The optional trailing -a..-h flags are forwarded to runtest.sh + the analysis,
-# so one test may appear on several rows (e.g. sedov -a 0/1/2, each a distinct
-# <runname>/reference).
+# Columns: test  Nsmooth  Nres  distrib  reg-tol  [-a..-h v ...]  [extra: <run-flags>]
+#   distrib: 0=lattice 1=random 2=glass
+#   -a..-h flags     forwarded to runtest.sh + the analysis (one test may appear on
+#                    several rows, e.g. sedov -a 0/1/2, each a distinct reference).
+#   extra: <flags>   runtest.sh's [extra] positional, forwarded ONLY to the run
+#                    (e.g. "extra: -n 50" caps ChaNGa at 50 steps); not the analysis.
 #
-# run_changa_ci_test.sh reads this file natively when no <test> is given:
-#   bash ci/run_changa_ci_test.sh --bless "$CHANGA_SRC"   # bless every row
-#   bash ci/run_changa_ci_test.sh         "$CHANGA_SRC"   # gate  every row
-sedov   64  32  2  1e-1
-orzag   64  32  2  1e-1
+# run_changa_ci_test.sh reads this file natively when no <test> is given; point it
+# at a larger/less-frequent list with --matrix <file>:
+#   bash ci/run_changa_ci_test.sh --bless "$CHANGA_SRC"            # bless every row
+#   bash ci/run_changa_ci_test.sh         "$CHANGA_SRC"            # gate  every row
+#   bash ci/run_changa_ci_test.sh --matrix ci/matrix_full.txt "$CHANGA_SRC"
+sedov   64  32  2  1e-1   extra: -n 100
+orzag   64  32  2  1e-1   extra: -n 50

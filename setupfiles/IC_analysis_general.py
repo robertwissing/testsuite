@@ -340,15 +340,13 @@ def finish_figure(fig, save=None, dpi=150):
 
 def finish_figure_with_legend(fig, ax, save=None, dpi=150):
     """Like `finish_figure`, but the legend (built from `ax`'s labelled artists)
-    is written to a SEPARATE figure rather than drawn on the axes -- the project
-    convention so the plot stays clean (publication-friendly).
+    is drawn BELOW the figure itself -- a figure-level legend anchored under the
+    axes -- so the plot stays one self-contained image instead of a separate
+    '<stem>_legend.png'. Placing it below (not on the axes) keeps it clear of
+    in-axes annotations like the L1-error boxes.
 
-    `save` is the figure path (e.g. 'out_profile.png'); the legend is saved
-    alongside as '<stem>_legend.png'. When `ax` is a sequence of axes, the labels
-    are pooled across them (de-duplicated, first occurrence wins). With no `save`,
-    the legend is shown as its OWN figure window too -- drawing it on the axes
-    (the old behavior) covered in-axes annotations like the L1-error boxes
-    (loc="best" avoids data artists but not text)."""
+    `save` is the figure path (e.g. 'out_profile.png'). When `ax` is a sequence
+    of axes, the labels are pooled across them (de-duplicated, first wins)."""
     import matplotlib.pyplot as plt
     axes = ax if isinstance(ax, (list, tuple, np.ndarray)) else [ax]
     handles, labels = [], []
@@ -360,32 +358,20 @@ def finish_figure_with_legend(fig, ax, save=None, dpi=150):
                 handles.append(h)
                 labels.append(l)
 
+    extra = ()
+    if handles:
+        leg = fig.legend(handles, labels, loc="upper center",
+                         bbox_to_anchor=(0.5, 0.0), ncol=min(3, len(labels)),
+                         frameon=False, handlelength=2.5, handletextpad=0.8,
+                         columnspacing=1.5)
+        extra = (leg,)
+
     if not save:
-        if handles:
-            legfig = plt.figure(figsize=(6, 0.5 + 0.35 * len(labels)))
-            legfig.legend(handles, labels, loc="center",
-                          ncol=min(3, len(labels)), frameon=False,
-                          handlelength=2.5, handletextpad=0.8,
-                          columnspacing=1.5)
-            legfig.tight_layout(pad=0.1)
         plt.show()
         return
-
-    legfig = None
-    if handles:
-        legfig = plt.figure(figsize=(6, 0.5 + 0.35 * len(labels)))
-        legfig.legend(handles, labels, loc="center", ncol=min(3, len(labels)),
-                      frameon=False, handlelength=2.5, handletextpad=0.8,
-                      columnspacing=1.5)
-        legfig.tight_layout(pad=0.1)
-    fig.savefig(save, bbox_inches="tight", dpi=dpi)
+    # bbox_extra_artists + tight bbox so the below-figure legend isn't clipped.
+    fig.savefig(save, bbox_inches="tight", bbox_extra_artists=extra, dpi=dpi)
     print(f"saved {save}")
-    if legfig is not None:
-        stem, _, ext = save.rpartition(".")
-        legpath = f"{stem}_legend.{ext}" if stem else f"{save}_legend.png"
-        legfig.savefig(legpath, bbox_inches="tight", dpi=dpi)
-        print(f"saved {legpath}")
-        plt.close(legfig)
     plt.close(fig)
 
 def loaddata(entry: str):

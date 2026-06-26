@@ -270,7 +270,7 @@ def plot_profiles(inputs, labels, t, params, save=None, ref_table=None):
         for ax, key in ((axRho, "rho"), (axRhoLog, "rho"), (axVel, "v_r"),
                         (axP, "P"), (axEnt, "entropy"), (axU, "u")):
             if key in ref_table:
-                ax.plot(xr, ref_table[key], "--", color="0.35", lw=1.5, zorder=5,
+                ax.plot(xr, ref_table[key], "--", color="red", lw=1.5, zorder=5,
                         label=("reference" if ax is axRho else None))
 
     l1_lines = []
@@ -387,13 +387,13 @@ def plot_energy_vs_time(inputs, labels, t, params, save=None, ref_table=None,
     # Reference overlay: the blessed (normalised) total/kinetic/thermal energy.
     if ref_table is not None and "Etot_n" in ref_table:
         te = ref_table["t_energy"]
-        ax.plot(te, ref_table["Etot_n"], "--", color="0.5", lw=1.3, zorder=5,
+        ax.plot(te, ref_table["Etot_n"], "--", color="red", lw=1.3, zorder=5,
                 label="reference")
         if "Ekin_n" in ref_table:
-            ax.plot(te, ref_table["Ekin_n"], "--", color="0.5", lw=0.9,
+            ax.plot(te, ref_table["Ekin_n"], "--", color="red", lw=0.9,
                     alpha=0.7, zorder=5)
         if "Eth_n" in ref_table:
-            ax.plot(te, ref_table["Eth_n"], ":", color="0.5", lw=1.1, zorder=5)
+            ax.plot(te, ref_table["Eth_n"], ":", color="red", lw=1.1, zorder=5)
     for inp, lab in zip(inputs, labels):
         tufac = read_tufac(inp)
         ts, ek, eth, em, source = energy_series(inp, tufac)

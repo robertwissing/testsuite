@@ -1192,21 +1192,23 @@ def render_panels(entries, spec, times=None, n=4, res=512, save=None,
         diffcmap = plt.get_cmap("RdBu_r").copy()
         diffcmap.set_bad(diffcmap(0.5))
 
-        # Layout: [sim | ref | field-cbar | diff | diff-cbar] via gridspec with
-        # two dedicated thin colorbar columns, so the colorbars sit at their own
-        # column edges instead of stealing space between the panels (which put
-        # the field colorbar in the MIDDLE of the figure). Panels tile seamlessly:
-        # inner tick labels dropped, x only on the bottom row, y only on the left.
+        # Layout: [sim | ref | field-cbar | <spacer> | diff | diff-cbar] via
+        # gridspec with two dedicated thin colorbar columns, so the colorbars sit
+        # at their own column edges instead of stealing space between the panels.
+        # The field colorbar is in the MIDDLE, so its right-side label/ticks need a
+        # blank spacer column before the diff panel (else the rho label overlaps
+        # the diff figure; the diff colorbar at the far edge needs none). Panels
+        # tile seamlessly: inner tick labels dropped, x only bottom row, y only left.
         fig = plt.figure(figsize=(13, 4.0 * npan))
-        gs = fig.add_gridspec(npan, 5, width_ratios=[1, 1, 0.06, 1, 0.06],
+        gs = fig.add_gridspec(npan, 6, width_ratios=[1, 1, 0.06, 0.16, 1, 0.06],
                               wspace=0.07, hspace=0.07)
         axes = np.empty((npan, 3), dtype=object)
         for i in range(npan):
             axes[i][0] = fig.add_subplot(gs[i, 0])
             axes[i][1] = fig.add_subplot(gs[i, 1])
-            axes[i][2] = fig.add_subplot(gs[i, 3])
+            axes[i][2] = fig.add_subplot(gs[i, 4])
         cax_field = fig.add_subplot(gs[:, 2])
-        cax_diff = fig.add_subplot(gs[:, 4])
+        cax_diff = fig.add_subplot(gs[:, 5])
         col_titles = (("simulation", "reference", "sim − reference")
                       if ref_name == "reference" else
                       (r["label"], ref_name, f"{r['label']} − {ref_name}"))
@@ -1660,11 +1662,13 @@ def render_movie(input_arg, label, spec, save=None, res=512, backend="grid",
         z0 = np.zeros_like(panels[0][1])
 
         fig = plt.figure(figsize=(13, 4.8))
-        gs = fig.add_gridspec(1, 5, width_ratios=[1, 1, 0.06, 1, 0.06],
+        # Spacer column (gs[*,3]) after the middle field colorbar so its right-side
+        # label doesn't overlap the diff panel (see render_panels residual layout).
+        gs = fig.add_gridspec(1, 6, width_ratios=[1, 1, 0.06, 0.16, 1, 0.06],
                               wspace=0.07)
         ax0, ax1, ax2 = (fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]),
-                         fig.add_subplot(gs[0, 3]))
-        caxf, caxd = fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[0, 4])
+                         fig.add_subplot(gs[0, 4]))
+        caxf, caxd = fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[0, 5])
         im0 = ax0.imshow(panels[0][1], extent=panels[0][2], origin="lower",
                          cmap=cmap, norm=norm, vmin=lo, vmax=hi, aspect=aspect)
         im1 = ax1.imshow(ref["grids"][ref_match[0]][0],

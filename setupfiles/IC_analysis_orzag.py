@@ -164,6 +164,12 @@ def do_render(inputs, labels, args, save, is3d=False, bless=False,
     # mid-plane) and 3-D (cube mid-plane); --render-project overrides.
     default_project = "slice"
     times = args.render_times if args.render_times else default_times
+    # Drawing: drop requested times with no snapshot (e.g. a short -n run that
+    # never reaches the later default times) so they don't clamp to the last dump
+    # and show duplicate panels. Blessing keeps its own bless_times logic below.
+    if not bless:
+        miss = set(missing_render_times(inputs[0], times))
+        times = [t for t in times if t not in miss] or times
     # Bless times: the default/--render-times (--save-reference), or EVERY dump
     # (--save-reference-all). The saved grids are fixed-resolution images,
     # decoupled from N, so blessing all dumps stays cheap and makes the reference
@@ -260,14 +266,18 @@ def _y0_for_time(t, override):
     return 0.3125 if abs(t - 0.5) < 1e-3 else 0.0
 
 
-def do_y0_cut(inputs, labels, args, save):
+def do_y0_cut(inputs, labels, args, save, bless=False):
     """1-D horizontal cuts of rho, Bx, By, div B vs x along y=y0, at each render
     time (default y0 = centre, 0.3125 at t=0.5). Delegates to the framework's
-    generic `horizontal_cut`."""
+    generic `horizontal_cut`; --reference overlays the blessed cut baseline."""
     times = args.render_times if args.render_times else DEFAULT_RENDER_TIMES
+    if not bless:                       # drop times with no snapshot (short runs)
+        miss = set(missing_render_times(inputs[0], times))
+        times = [t for t in times if t not in miss] or times
     horizontal_cut(inputs, labels, mhd_field_cut_quants(), times,
                    lambda t: _y0_for_time(t, args.y0), save=save,
-                   title_prefix="Orszag-Tang ")
+                   title_prefix="Orszag-Tang ",
+                   reference=args.reference, bless=bless)
 
 
 # --------------------------------------------------------------------------- #
@@ -363,7 +373,7 @@ def plot_emag_vs_time(inputs, labels, save=None, ref_table=None):
     fig, ax = plt.subplots(figsize=(8, 6))
     any_data = False
     if ref_table is not None and "Emag" in ref_table:
-        ax.plot(ref_table["x"], ref_table["Emag"], "--", color="0.35", lw=1.5,
+        ax.plot(ref_table["x"], ref_table["Emag"], "--", color="red", lw=1.5,
                 label="reference", zorder=5)
     for inp, lab in zip(inputs, labels):
         ts, em, source = emag_series(inp)
@@ -479,6 +489,8 @@ def main():
         # whether --render was passed.
         do_render(args.inputs, labels, args, save=args.save, is3d=is3d,
                   bless=True, all_times=all_times)
+        if not is3d:                    # 1-D cut baseline (OT benchmark line)
+            do_y0_cut(args.inputs, labels, args, save=args.save, bless=True)
         return
 
     print(f"[orzag] {'3-D (Tu 2022 / Helzel et al. 2011)' if is3d else '2-D'} "
